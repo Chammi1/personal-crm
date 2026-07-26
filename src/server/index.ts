@@ -6,6 +6,7 @@ import { createRequire } from 'node:module';
 import { config } from '../config.js';
 import { isOwner, verifyInitData } from './auth.js';
 import { api } from './api.js';
+import { sync } from './sync.js';
 
 const require = createRequire(import.meta.url);
 const app = new Hono();
@@ -25,6 +26,10 @@ app.use('/api/*', async (c, next) => {
 });
 
 app.route('/api', api);
+
+// Приём данных из СОТА CRM. Своя защита по SYNC_TOKEN — сюда стучится сервер,
+// а не браузер, и подписанного initData у него нет.
+app.route('/sync', sync);
 
 // Vue отдаём со своего же сервера, а не с CDN: меньше зависимостей от сети.
 app.get('/vendor/vue.js', (c) => {

@@ -15,4 +15,6 @@ export const config = {
   port: Number(process.env.PORT ?? 3000),
   publicUrl: process.env.PUBLIC_URL ?? '',
   allowInsecure: process.env.ALLOW_INSECURE === '1',
+  // Общий секрет для приёма данных из СОТА CRM. Пусто = синхронизация выключена.
+  syncToken: process.env.SYNC_TOKEN ?? '',
 };
