@@ -1,0 +1,18 @@
+import 'dotenv/config';
+
+function required(name: string): string {
+  const v = process.env[name];
+  if (!v) throw new Error(`Не задана переменная окружения ${name}. Скопируй .env.example в .env и заполни.`);
+  return v;
+}
+
+export const config = {
+  botToken: required('BOT_TOKEN'),
+  ownerId: Number(required('OWNER_ID')),
+  dbPath: process.env.DB_PATH ?? './data/crm.db',
+  timezone: process.env.TZ ?? 'Europe/Moscow',
+  digestHour: Number(process.env.DIGEST_HOUR ?? 10),
+  port: Number(process.env.PORT ?? 3000),
+  publicUrl: process.env.PUBLIC_URL ?? '',
+  allowInsecure: process.env.ALLOW_INSECURE === '1',
+};
