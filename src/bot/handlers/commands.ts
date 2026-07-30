@@ -53,6 +53,7 @@ commands.command(['start', 'help'], async (ctx) => {
       'Блоки: семья, работа, увлечения, планы, зацепки, нетрогать, подарки.',
       '',
       '/stats — заполненность кругов',
+      '/lead — за сколько дней напоминать о датах',
       '',
       '<b>Пока набираешь базу</b>',
       '/roster — прогресс и подсказка, кого вспоминать сегодня',
@@ -155,6 +156,27 @@ commands.command('target', async (ctx) => {
   }
   settings.set('intake_target', Math.round(n));
   await ctx.reply(`Цель: ${Math.round(n)} человек.`);
+});
+
+// Горизонт поводов: за сколько дней даты начинают проявляться в дайджесте и на карте.
+commands.command('lead', async (ctx) => {
+  const raw = ctx.match.toString().trim();
+  if (!raw) {
+    await ctx.reply(
+      `Поводы проявляются за ${agenda.leadDaysDefault()} дн до даты.\n` +
+      'Изменить: <code>/lead 21</code> — применится и к новым, и к уже заведённым датам.',
+      { parse_mode: 'HTML' },
+    );
+    return;
+  }
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1 || n > 90) {
+    await ctx.reply('Формат: <code>/lead 21</code> — целое число дней от 1 до 90.', { parse_mode: 'HTML' });
+    return;
+  }
+  settings.set(agenda.LEAD_DAYS_KEY, n);
+  agenda.setAllLeadDays(n);
+  await ctx.reply(`Теперь поводы проявляются за ${n} дн — у новых и существующих дат.`);
 });
 
 commands.command('quota', async (ctx) => {

@@ -1,18 +1,43 @@
+import * as settings from '../db/repo/settings.js';
+
 /**
- * Состояние в памяти. Пользователь ровно один, процесс один,
- * поэтому хранилище сложнее Map тут было бы преждевременным.
+ * Состояние диалога хранится в таблице settings, а не в памяти процесса:
+ * перезапуск контейнера посреди ввода заметки больше не теряет контекст.
+ * Пользователь один, поэтому пары ключей достаточно.
  */
-type Pending =
+export type Pending =
   | { type: 'note'; personId: number }
   | { type: 'task'; personId: number }
-  | { type: 'event'; personId: number };
+  | { type: 'event'; personId: number }
+  | { type: 'contact_note'; personId: number };
 
-let pending: Pending | null = null;
-let current: number | null = null;
+const PENDING_KEY = 'bot_pending';
+const CURRENT_KEY = 'bot_current';
 
-export const setPending = (p: Pending): void => { pending = p; };
-export const takePending = (): Pending | null => { const p = pending; pending = null; return p; };
-export const clearPending = (): void => { pending = null; };
+export function setPending(p: Pending): void {
+  settings.set(PENDING_KEY, JSON.stringify(p));
+}
 
-export const setCurrent = (id: number): void => { current = id; };
-export const getCurrent = (): number | null => current;
+export function takePending(): Pending | null {
+  const raw = settings.get(PENDING_KEY, '');
+  if (!raw) return null;
+  settings.set(PENDING_KEY, '');
+  try {
+    return JSON.parse(raw) as Pending;
+  } catch {
+    return null;
+  }
+}
+
+export function clearPending(): void {
+  settings.set(PENDING_KEY, '');
+}
+
+export function setCurrent(id: number): void {
+  settings.set(CURRENT_KEY, String(id));
+}
+
+export function getCurrent(): number | null {
+  const n = Number(settings.get(CURRENT_KEY, ''));
+  return Number.isInteger(n) && n > 0 ? n : null;
+}

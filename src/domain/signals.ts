@@ -4,6 +4,7 @@ import { addDays, daysBetween, nextOccurrence, today } from './dates.js';
 import * as people from '../db/repo/people.js';
 import * as timeline from '../db/repo/timeline.js';
 import * as agenda from '../db/repo/agenda.js';
+import * as family from './family.js';
 
 export type SignalKind = 'missed' | 'event' | 'owed' | 'risk' | 'late';
 
@@ -58,40 +59,60 @@ export function collect(now = today()): Signal[] {
   };
 
   // --- события: дни рождения, годовщины, переезды
+  //
+  // Событие может висеть на карточке-заглушке — автосозданном родственнике.
+  // Заглушек нет в active(), поэтому их поводы разрешаются через relation
+  // на владельцев: день рождения ребёнка — повод написать родителю.
+  // Имя и роль заглушки подставляются в формулировку без склонения.
   for (const e of agenda.allEvents()) {
-    const person = byId.get(e.person_id);
-    if (!person || isSnoozed(person.id)) continue;
+    const direct = byId.get(e.person_id);
+    const baseTitle = e.title ?? (e.kind === 'birthday' ? 'День рождения' : 'Событие');
 
-    const next = nextOccurrence(e.event_date, e.recurring === 1, now);
-    const left = daysBetween(now, next);
-    const title = e.title ?? (e.kind === 'birthday' ? 'День рождения' : 'Событие');
-
-    if (left >= 0 && left <= e.lead_days && e.handled_for !== next) {
-      out.push({
-        person, kind: 'event', why: title, days: left,
-        size: growth(left, e.lead_days),
-        priority: 500 - left,
-        eventId: e.id, occurrence: next,
-      });
-      continue;
+    let carriers: { person: Person; title: string }[];
+    if (direct) {
+      carriers = [{ person: direct, title: baseTitle }];
+    } else {
+      const stub = people.byId(e.person_id);
+      if (!stub || stub.is_stub !== 1 || stub.status !== 'active') continue;
+      carriers = family.ownersOf(stub.id).map((o) => ({
+        person: o.person,
+        title: `${baseTitle}: ${o.label} ${stub.name}`,
+      }));
     }
 
-    // событие только что прошло и не было закрыто — это отдельный, более громкий сигнал
-    if (e.recurring === 1) {
-      const prev = nextOccurrence(e.event_date, true, addDays(now, -4));
-      const passed = daysBetween(prev, now);
-      if (passed > 0 && passed <= 4 && e.handled_for !== prev) {
+    for (const { person, title } of carriers) {
+      if (isSnoozed(person.id)) continue;
+
+      const next = nextOccurrence(e.event_date, e.recurring === 1, now);
+      const left = daysBetween(now, next);
+
+      if (left >= 0 && left <= e.lead_days && e.handled_for !== next) {
         out.push({
-          person, kind: 'missed', why: `${title} — прошёл ${passed} дн назад`,
-          days: -passed, size: 1, priority: 900,
-          eventId: e.id, occurrence: prev,
+          person, kind: 'event', why: title, days: left,
+          size: growth(left, e.lead_days),
+          priority: 500 - left,
+          eventId: e.id, occurrence: next,
+        });
+        continue;
+      }
+
+      // событие только что прошло и не было закрыто — это отдельный, более громкий сигнал
+      if (e.recurring === 1) {
+        const prev = nextOccurrence(e.event_date, true, addDays(now, -4));
+        const passed = daysBetween(prev, now);
+        if (passed > 0 && passed <= 4 && e.handled_for !== prev) {
+          out.push({
+            person, kind: 'missed', why: `${title} — прошёл ${passed} дн назад`,
+            days: -passed, size: 1, priority: 900,
+            eventId: e.id, occurrence: prev,
+          });
+        }
+      } else if (left < 0 && left >= -4 && e.handled_for !== next) {
+        out.push({
+          person, kind: 'missed', why: `${title} — прошло ${-left} дн назад`,
+          days: left, size: 1, priority: 900, eventId: e.id, occurrence: next,
         });
       }
-    } else if (left < 0 && left >= -4 && e.handled_for !== next) {
-      out.push({
-        person, kind: 'missed', why: `${title} — прошло ${-left} дн назад`,
-        days: left, size: 1, priority: 900, eventId: e.id, occurrence: next,
-      });
     }
   }
 

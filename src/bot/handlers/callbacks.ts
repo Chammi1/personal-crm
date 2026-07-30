@@ -7,7 +7,7 @@ import * as people from '../../db/repo/people.js';
 import * as timeline from '../../db/repo/timeline.js';
 import * as agenda from '../../db/repo/agenda.js';
 import * as ui from '../ui.js';
-import { setCurrent, setPending } from '../state.js';
+import { clearPending, setCurrent, setPending } from '../state.js';
 
 export const callbacks = new Composer();
 
@@ -37,6 +37,21 @@ callbacks.callbackQuery(/^c:(\d+):(message|call|meeting|event)$/, async (ctx) =>
   timeline.logInteraction(id, channel);
   await ctx.answerCallbackQuery(`${CHANNEL_WORD[channel]} записана`);
   await showCard(ctx, id, true);
+
+  // Сразу спрашиваем содержание: без этого копится идеальная история дат
+  // при пустой истории разговоров, а перед звонком нужна именно вторая.
+  setPending({ type: 'contact_note', personId: id });
+  await ctx.reply('О чём говорили? Одной строкой — уйдёт в заметки.', {
+    reply_markup: new InlineKeyboard().text('Пропустить', 'skipnote'),
+  });
+});
+
+callbacks.callbackQuery('skipnote', async (ctx) => {
+  clearPending();
+  await ctx.answerCallbackQuery('Ок');
+  if (ctx.callbackQuery.message) {
+    await ctx.editMessageText('Ок, без заметки.');
+  }
 });
 
 callbacks.callbackQuery(/^sn:(\d+):(\d+)$/, async (ctx) => {
@@ -108,14 +123,16 @@ callbacks.callbackQuery(/^tk:(\d+)$/, async (ctx) => {
 /** Обработка свободного ввода, которого ждала одна из кнопок. */
 export async function handlePendingInput(
   ctx: Context,
-  pending: { type: 'note' | 'task' | 'event'; personId: number },
+  pending: { type: 'note' | 'task' | 'event' | 'contact_note'; personId: number },
   text: string,
 ): Promise<void> {
   const id = pending.personId;
 
-  if (pending.type === 'note') {
+  if (pending.type === 'note' || pending.type === 'contact_note') {
     timeline.addNote(id, text);
     await ctx.reply('Записал.');
+    // после записи контакта карточка уже на экране — не дублируем её
+    if (pending.type === 'contact_note') return;
   }
 
   if (pending.type === 'task') {

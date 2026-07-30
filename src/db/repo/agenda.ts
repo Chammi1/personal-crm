@@ -1,21 +1,34 @@
 import { db } from '../index.js';
 import { today } from '../../domain/dates.js';
 import type { EventKind, PersonEvent, Task, TaskDirection } from '../types.js';
+import * as settings from './settings.js';
+
+/**
+ * За сколько дней повод начинает проявляться. Одно значение на все виды
+ * событий — и людей, и питомцев; меняется командой /lead.
+ */
+export const LEAD_DAYS_KEY = 'lead_days';
+export const LEAD_DAYS_DEFAULT = 30;
+
+export function leadDaysDefault(): number {
+  return settings.getNumber(LEAD_DAYS_KEY, LEAD_DAYS_DEFAULT);
+}
 
 export function addEvent(
   personId: number,
   kind: EventKind,
   eventDate: string,
-  opts: { title?: string; recurring?: boolean; leadDays?: number } = {},
+  opts: { title?: string; recurring?: boolean; leadDays?: number; petId?: number } = {},
 ): number {
   const info = db.prepare(`
-    INSERT INTO event (person_id, kind, title, event_date, recurring, lead_days)
-    VALUES (?, ?, ?, ?, ?, ?)
+    INSERT INTO event (person_id, kind, title, event_date, recurring, lead_days, pet_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
   `).run(
     personId, kind, opts.title ?? null, eventDate,
     // SQLite не биндит boolean — приводим к 0/1 явно
     opts.recurring === undefined ? (kind === 'birthday' ? 1 : 0) : (opts.recurring ? 1 : 0),
-    opts.leadDays ?? 30,
+    opts.leadDays ?? leadDaysDefault(),
+    opts.petId ?? null,
   );
   return Number(info.lastInsertRowid);
 }
@@ -35,6 +48,22 @@ export function eventsOf(personId: number): PersonEvent[] {
 /** Помечает конкретное наступление события закрытым, чтобы оно не всплывало снова в этом году. */
 export function markEventHandled(eventId: number, occurrenceDate: string): void {
   db.prepare('UPDATE event SET handled_for = ? WHERE id = ?').run(occurrenceDate, eventId);
+}
+
+/**
+ * Смена горизонта разом у всех событий. Per-event значение нигде из
+ * интерфейса не выставляется, поэтому массовое обновление ничего не теряет.
+ */
+export function setAllLeadDays(days: number): void {
+  db.prepare('UPDATE event SET lead_days = ?').run(days);
+}
+
+export function removeEvent(id: number): void {
+  db.prepare('DELETE FROM event WHERE id = ?').run(id);
+}
+
+export function removeTask(id: number): void {
+  db.prepare('DELETE FROM task WHERE id = ?').run(id);
 }
 
 export function addTask(

@@ -45,6 +45,43 @@ const plural = (n, a, b, c) => {
   return c;
 };
 
+/** Уменьшение картинки прямо в браузере: серверу не нужен sharp, трафика меньше. */
+function resizeImage(file, max = 320) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      const scale = Math.min(1, max / Math.max(img.width, img.height));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(img.width * scale);
+      canvas.height = Math.round(img.height * scale);
+      canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+      URL.revokeObjectURL(url);
+      resolve(canvas.toDataURL('image/jpeg', 0.82));
+    };
+    img.onerror = reject;
+    img.src = url;
+  });
+}
+
+function pickImage() {
+  return new Promise((resolve) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*';
+    input.onchange = async () => {
+      const file = input.files?.[0];
+      resolve(file ? await resizeImage(file) : null);
+    };
+    input.click();
+  });
+}
+
+const ROLES = [
+  ['spouse', 'супруг(а)'], ['child', 'ребёнок'], ['parent', 'родитель'],
+  ['sibling', 'брат/сестра'], ['relative', 'родственник'],
+];
+
 const App = {
   setup() {
     const tab = ref('map');
@@ -170,6 +207,190 @@ const App = {
       if (body?.keepOpen) await open(id);
     }
 
+    // ---- редактирование
+    const editing = ref(null);
+    const confirmStep = ref(null);   // 'archive' | 'delete'
+    const newEvent = ref({ date: '', title: '', recurring: true });
+    const archivedList = ref(null);
+
+    const block = ref('main');            // раскрытый блок в правке
+    const toggleBlock = (b) => { block.value = block.value === b ? null : b; };
+
+    const newMember = ref({ name: '', role: 'spouse', birthday: '' });
+    const newPet = ref({ name: '', species: '', breed: '', birthday: '', note: '' });
+
+    const DOSSIER_BLOCKS = [
+      ['family', 'Семья'], ['occupation', 'Работа'], ['recreation', 'Увлечения'],
+      ['dreams', 'Планы'], ['hooks', 'Зацепки'], ['avoid', 'Не трогать'], ['gift_ideas', 'Подарки'],
+    ];
+
+    function openEdit() {
+      const p = opened.value;
+      const d = p.dossier ?? {};
+      editing.value = {
+        id: p.id, name: p.name, circle: p.circle, tags: [...p.tags],
+        city: p.city ?? '', telegram: p.telegram ?? '', phone: p.phone ?? '',
+        context: p.met_context ?? '', interval: p.target_interval ?? '', rapport: p.rapport ?? 0,
+        lastContact: '', newTag: '',
+        dossier: Object.fromEntries(DOSSIER_BLOCKS.map(([k]) => [k, d[k] ?? ''])),
+      };
+      confirmStep.value = null;
+      block.value = 'main';
+      newEvent.value = { date: '', title: '', recurring: true };
+      newMember.value = { name: '', role: 'spouse', birthday: '' };
+      newPet.value = { name: '', species: '', breed: '', birthday: '', note: '' };
+    }
+
+    // ---- аватары
+    async function uploadAvatar(kind, id) {
+      const data = await pickImage();
+      if (!data) return;
+      try {
+        await call(`/${kind}/${id}/avatar`, { method: 'POST', body: JSON.stringify({ data }) });
+        await open(opened.value.id);
+        flash('Фото загружено');
+      } catch (err) {
+        flash(err.message);
+      }
+    }
+
+    // ---- семья
+    async function addMember() {
+      const m = newMember.value;
+      if (!m.name.trim()) return;
+      try {
+        await call('/person/' + editing.value.id + '/family', {
+          method: 'POST',
+          body: JSON.stringify({ name: m.name, role: m.role, birthday: m.birthday || undefined }),
+        });
+        newMember.value = { name: '', role: m.role, birthday: '' };
+        await open(editing.value.id);
+        flash('Родственник добавлен и связан');
+      } catch (err) {
+        flash(err.message);
+      }
+    }
+
+    async function delMember(memberId) {
+      await call(`/person/${editing.value.id}/family/${memberId}`, { method: 'DELETE' });
+      await open(editing.value.id);
+      flash('Связь убрана');
+    }
+
+    async function activateMember(id) {
+      await call('/person/' + id + '/activate', { method: 'POST', body: JSON.stringify({ circle: 3 }) });
+      await open(editing.value.id);
+      await load();
+      flash('Теперь полноценная карточка');
+    }
+
+    // ---- питомцы
+    async function addPet() {
+      const p = newPet.value;
+      if (!p.name.trim()) return;
+      try {
+        await call('/person/' + editing.value.id + '/pet', { method: 'POST', body: JSON.stringify(p) });
+        newPet.value = { name: '', species: '', breed: '', birthday: '', note: '' };
+        await open(editing.value.id);
+        flash('Питомец добавлен');
+      } catch (err) {
+        flash(err.message);
+      }
+    }
+
+    async function delPet(id) {
+      await call('/pet/' + id, { method: 'DELETE' });
+      await open(editing.value.id);
+      flash('Питомец удалён');
+    }
+
+    function toggleEditTag(t) {
+      const i = editing.value.tags.indexOf(t);
+      if (i >= 0) editing.value.tags.splice(i, 1);
+      else editing.value.tags.push(t);
+    }
+    function addEditTag() {
+      const t = editing.value.newTag.trim().toLowerCase();
+      if (t && !editing.value.tags.includes(t)) editing.value.tags.push(t);
+      editing.value.newTag = '';
+    }
+
+    async function saveEdit() {
+      const e = editing.value;
+      if (!e.name.trim()) return;
+      saving.value = true;
+      try {
+        await call('/person/' + e.id, {
+          method: 'PATCH',
+          body: JSON.stringify({
+            name: e.name, circle: e.circle, tags: e.tags,
+            city: e.city, telegram: e.telegram, phone: e.phone,
+            context: e.context, interval: e.interval === '' ? null : Number(e.interval),
+            dossier: e.dossier,
+            rapport: e.rapport || null,
+            lastContact: e.lastContact || undefined,
+          }),
+        });
+        const id = e.id;
+        editing.value = null;
+        await load();
+        await open(id);
+        flash('Сохранено');
+      } catch (err) {
+        flash('Не сохранилось: ' + err.message);
+      } finally {
+        saving.value = false;
+      }
+    }
+
+    async function addEvent() {
+      const ev = newEvent.value;
+      if (!ev.date.trim()) return;
+      try {
+        await call('/person/' + editing.value.id + '/event', {
+          method: 'POST',
+          body: JSON.stringify({ date: ev.date, title: ev.title, recurring: ev.recurring }),
+        });
+        newEvent.value = { date: '', title: '', recurring: true };
+        await open(editing.value.id);
+        flash('Дата добавлена');
+      } catch (err) {
+        flash(err.message);
+      }
+    }
+
+    async function delEvent(id) {
+      await call('/event/' + id, { method: 'DELETE' });
+      await open(editing.value.id);
+      flash('Дата удалена');
+    }
+
+    async function archivePerson() {
+      if (confirmStep.value !== 'archive') { confirmStep.value = 'archive'; return; }
+      await call('/person/' + editing.value.id + '/archive', { method: 'POST' });
+      editing.value = null; opened.value = null;
+      await load();
+      flash('В архиве. Восстановить можно на вкладке «Разметка»');
+    }
+
+    async function deletePerson() {
+      if (confirmStep.value !== 'delete') { confirmStep.value = 'delete'; return; }
+      await call('/person/' + editing.value.id, { method: 'DELETE' });
+      editing.value = null; opened.value = null;
+      await load();
+      flash('Удалён вместе с историей');
+    }
+
+    async function loadArchived() {
+      archivedList.value = await call('/archived');
+    }
+    async function restorePerson(id) {
+      await call('/person/' + id + '/restore', { method: 'POST' });
+      await loadArchived();
+      await load();
+      flash('Восстановлен');
+    }
+
     // ---- добавление
     const circleLoad = computed(() => state.value?.circleLoad ?? []);
 
@@ -229,6 +450,11 @@ const App = {
       WHEN, iso, humanDate, humanDays, plural, KIND, HEALTH,
       sectorLabel, sectorEdge, lit, ghosts, nodeRadius, nodeColor, showLabel, labelPos, shortWhy,
       headline, subline, circleLoad, open, act, toggleTag, addNewTag, save, anotherPrompt, load, flash,
+      editing, confirmStep, newEvent, archivedList, DOSSIER_BLOCKS, ROLES,
+      block, toggleBlock, newMember, newPet,
+      uploadAvatar, addMember, delMember, activateMember, addPet, delPet,
+      openEdit, toggleEditTag, addEditTag, saveEdit, addEvent, delEvent,
+      archivePerson, deletePerson, loadArchived, restorePerson,
     };
   },
 
@@ -410,6 +636,19 @@ const App = {
         </div>
       </template>
 
+      <label>Архив</label>
+      <button class="btn ghost" @click="loadArchived" v-if="archivedList === null">Показать архив</button>
+      <template v-else>
+        <p class="hint" v-if="!archivedList.length">Архив пуст.</p>
+        <div class="list">
+          <button v-for="a in archivedList" :key="a.id" @click="restorePerson(a.id)">
+            <span class="bead" style="background:var(--ink-faint)"></span>
+            <span>{{ a.name }}</span>
+            <span class="tail">вернуть</span>
+          </button>
+        </div>
+      </template>
+
       <label>Круги</label>
       <div class="list">
         <div v-for="c in circleLoad" :key="c.circle" style="display:flex;gap:10px;padding:11px 2px;border-bottom:1px solid var(--line);font-size:14.5px">
@@ -428,10 +667,21 @@ const App = {
   <Transition name="slide">
     <section v-if="opened" class="sheet">
       <div class="grab"></div>
-      <h2>{{ opened.name }}</h2>
-      <div class="meta">
-        круг {{ opened.circle }} · {{ opened.circleLabel }}
-        <template v-if="opened.city"> · {{ opened.city }}</template>
+      <div class="who">
+        <button class="ava" @click="uploadAvatar('person', opened.id)">
+          <img v-if="opened.avatar" :src="'/avatars/' + opened.avatar" alt="">
+          <span v-else>{{ opened.name.slice(0, 1) }}</span>
+        </button>
+        <div>
+          <h2>{{ opened.name }}</h2>
+          <div class="meta">
+            круг {{ opened.circle }} · {{ opened.circleLabel }}
+            <template v-if="opened.city"> · {{ opened.city }}</template>
+          </div>
+          <div class="rate" v-if="opened.rapport">
+            <i v-for="n in 5" :key="n" :class="{ on: n <= opened.rapport }"></i>
+          </div>
+        </div>
       </div>
 
       <div class="why-row" v-if="opened.lastOn">
@@ -450,6 +700,34 @@ const App = {
         <div v-if="opened.dossier.dreams"><b>Планы:</b> {{ opened.dossier.dreams }}</div>
       </div>
       <div class="recall" v-else>Досье пустое. Заполни блоки в боте: <b>/f семья ...</b></div>
+
+      <template v-if="opened.family && opened.family.length">
+        <div class="meta" style="margin-top:16px">семья</div>
+        <div class="kin">
+          <div class="kin-card" v-for="m in opened.family" :key="m.id">
+            <span class="ava sm">
+              <img v-if="m.avatar" :src="'/avatars/' + m.avatar" alt="">
+              <span v-else>{{ m.name.slice(0, 1) }}</span>
+            </span>
+            <b>{{ m.name }}</b>
+            <em>{{ m.label }}<template v-if="m.derived"> ·&nbsp;авто</template></em>
+          </div>
+        </div>
+      </template>
+
+      <template v-if="opened.pets && opened.pets.length">
+        <div class="meta" style="margin-top:16px">питомцы</div>
+        <div class="kin">
+          <div class="kin-card" v-for="p in opened.pets" :key="p.id">
+            <button class="ava sm" @click="uploadAvatar('pet', p.id)">
+              <img v-if="p.avatar" :src="'/avatars/' + p.avatar" alt="">
+              <span v-else>{{ p.name.slice(0, 1) }}</span>
+            </button>
+            <b>{{ p.name }}</b>
+            <em>{{ [p.species, p.breed].filter(Boolean).join(', ') || 'питомец' }}</em>
+          </div>
+        </div>
+      </template>
 
       <template v-if="opened.events.length">
         <div class="meta" style="margin-top:16px">даты</div>
@@ -479,7 +757,196 @@ const App = {
       </div>
       <div class="acts">
         <button @click="act('/person/' + opened.id + '/snooze', { days: 7 })">Отложить неделю</button>
-        <button @click="opened = null">Закрыть</button>
+        <button @click="openEdit">Редактировать</button>
+      </div>
+    </section>
+  </Transition>
+
+  <!-- ================= ПРАВКА ================= -->
+  <Transition name="fade">
+    <div v-if="editing" class="scrim" @click="editing = null"></div>
+  </Transition>
+  <Transition name="slide">
+    <section v-if="editing" class="sheet edit">
+      <div class="grab"></div>
+      <h2>Правка</h2>
+
+      <div class="acc" :class="{ open: block === 'main' }">
+        <button class="acc-head" @click="toggleBlock('main')">Основное<i></i></button>
+        <div class="acc-body" v-if="block === 'main'">
+
+      <label>Имя</label>
+      <input type="text" v-model="editing.name" autocapitalize="words">
+
+      <label>Круг близости</label>
+      <div class="rings-pick">
+        <button type="button" v-for="c in circleLoad" :key="c.circle"
+                :class="{ on: editing.circle === c.circle }" @click="editing.circle = c.circle">
+          <span class="bead"></span><span>{{ c.label }}</span>
+          <span class="cap" :class="{ over: c.n >= c.cap }">{{ c.n }} / {{ c.cap }}</span>
+        </button>
+      </div>
+
+      <label>Как вам вместе</label>
+      <div class="rate big">
+        <button v-for="n in 5" :key="n" :class="{ on: n <= editing.rapport }"
+                @click="editing.rapport = editing.rapport === n ? 0 : n"></button>
+        <span class="hint" style="margin:0 0 0 10px">{{ ['не оценено','тяжело','прохладно','нормально','хорошо','отлично'][editing.rapport] }}</span>
+      </div>
+
+      <label>Свой интервал, дней</label>
+      <input type="text" v-model="editing.interval" inputmode="numeric"
+             :placeholder="'по кругу — ' + (opened ? opened.interval : '') + ' дн'">
+
+      <label>Теги</label>
+      <div class="chips">
+        <button type="button" class="chip" v-for="t in tags" :key="t.tag"
+                :class="{ on: editing.tags.includes(t.tag) }" @click="toggleEditTag(t.tag)">
+          {{ t.tag }}<small>{{ t.n }}</small>
+        </button>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <input type="text" v-model="editing.newTag" placeholder="новый тег"
+               @keydown.enter.prevent="addEditTag" autocapitalize="none">
+        <button type="button" class="btn ghost" style="flex:0 0 96px" @click="addEditTag">Добавить</button>
+      </div>
+
+      <label>Поправить дату последнего общения</label>
+      <div class="chips">
+        <button type="button" class="chip" v-for="w in WHEN" :key="w.label"
+                :class="{ on: editing.lastContact === w.value() }" @click="editing.lastContact = w.value()">
+          {{ w.label }}
+        </button>
+      </div>
+      <p class="hint">Прошлые контакты не стираются — добавляется ещё один задним числом.</p>
+        </div>
+      </div>
+
+      <div class="acc" :class="{ open: block === 'dreams' }">
+        <button class="acc-head" @click="toggleBlock('dreams')">Цели и мечты<i></i></button>
+        <div class="acc-body" v-if="block === 'dreams'">
+          <textarea v-model="editing.dossier.dreams" rows="4"
+                    placeholder="К чему идёт, о чём говорит с горящими глазами, чего опасается"></textarea>
+          <p class="hint">Самый ценный блок досье и самый пустой у большинства. Один вопрос по нему стоит десяти дежурных сообщений.</p>
+        </div>
+      </div>
+
+      <div class="acc" :class="{ open: block === 'dossier' }">
+        <button class="acc-head" @click="toggleBlock('dossier')">Остальное досье<i></i></button>
+        <div class="acc-body" v-if="block === 'dossier'">
+          <template v-for="b in DOSSIER_BLOCKS" :key="b[0]">
+            <template v-if="b[0] !== 'dreams'">
+              <div class="meta" style="margin:12px 0 6px">{{ b[1] }}</div>
+              <textarea v-model="editing.dossier[b[0]]" rows="2" :placeholder="b[1]"></textarea>
+            </template>
+          </template>
+        </div>
+      </div>
+
+      <div class="acc" :class="{ open: block === 'family' }">
+        <button class="acc-head" @click="toggleBlock('family')">
+          Семья<span class="cnt" v-if="opened && opened.family.length">{{ opened.family.length }}</span><i></i>
+        </button>
+        <div class="acc-body" v-if="block === 'family'">
+          <div class="list" v-if="opened && opened.family.length">
+            <div v-for="m in opened.family" :key="m.id" class="kin-row">
+              <span class="ava sm">
+                <img v-if="m.avatar" :src="'/avatars/' + m.avatar" alt="">
+                <span v-else>{{ m.name.slice(0, 1) }}</span>
+              </span>
+              <span class="kin-name">{{ m.name }}<em>{{ m.label }}<template v-if="m.derived"> · авто</template></em></span>
+              <button class="mini" v-if="m.isStub" @click="activateMember(m.id)">в круг</button>
+              <button class="mini danger-btn" @click="delMember(m.id)">×</button>
+            </div>
+          </div>
+
+          <div class="meta" style="margin:16px 0 8px">добавить</div>
+          <div class="row">
+            <input type="text" v-model="newMember.name" placeholder="имя" autocapitalize="words">
+            <select v-model="newMember.role">
+              <option v-for="r in ROLES" :key="r[0]" :value="r[0]">{{ r[1] }}</option>
+            </select>
+          </div>
+          <div class="row" style="margin-top:8px">
+            <input type="text" v-model="newMember.birthday" placeholder="др 12.04" inputmode="numeric">
+            <button type="button" class="btn ghost" style="flex:0 0 100px" @click="addMember">Добавить</button>
+          </div>
+          <p class="hint">Карточка создаётся сразу и связывается со всей роднёй: дети одного родителя автоматически становятся братьями и сёстрами, супруг родителя — родителем детей. Такие карточки не занимают место в кругах и не шлют напоминаний, пока не нажать «в круг».</p>
+        </div>
+      </div>
+
+      <div class="acc" :class="{ open: block === 'pets' }">
+        <button class="acc-head" @click="toggleBlock('pets')">
+          Питомцы<span class="cnt" v-if="opened && opened.pets.length">{{ opened.pets.length }}</span><i></i>
+        </button>
+        <div class="acc-body" v-if="block === 'pets'">
+          <div class="list" v-if="opened && opened.pets.length">
+            <div v-for="p in opened.pets" :key="p.id" class="kin-row">
+              <button class="ava sm" @click="uploadAvatar('pet', p.id)">
+                <img v-if="p.avatar" :src="'/avatars/' + p.avatar" alt="">
+                <span v-else>{{ p.name.slice(0, 1) }}</span>
+              </button>
+              <span class="kin-name">{{ p.name }}<em>{{ [p.species, p.breed].filter(Boolean).join(', ') || 'питомец' }}</em></span>
+              <button class="mini danger-btn" @click="delPet(p.id)">×</button>
+            </div>
+          </div>
+
+          <div class="meta" style="margin:16px 0 8px">добавить</div>
+          <div class="row">
+            <input type="text" v-model="newPet.name" placeholder="кличка">
+            <input type="text" v-model="newPet.species" placeholder="кот, собака">
+          </div>
+          <div class="row" style="margin-top:8px">
+            <input type="text" v-model="newPet.breed" placeholder="порода">
+            <input type="text" v-model="newPet.birthday" placeholder="др 12.04" inputmode="numeric">
+          </div>
+          <textarea v-model="newPet.note" rows="2" placeholder="чем болеет, как зовут ласково" style="margin-top:8px"></textarea>
+          <button type="button" class="btn ghost" style="margin-top:8px" @click="addPet">Добавить питомца</button>
+          <p class="hint">Дата рождения питомца становится напоминанием тебе про хозяина: спросить про кота — часто теплее, чем спросить про работу.</p>
+        </div>
+      </div>
+
+      <div class="acc" :class="{ open: block === 'contacts' }">
+        <button class="acc-head" @click="toggleBlock('contacts')">Контакты и даты<i></i></button>
+        <div class="acc-body" v-if="block === 'contacts'">
+          <div class="row">
+            <input type="text" v-model="editing.city" placeholder="город">
+            <input type="text" v-model="editing.telegram" placeholder="@telegram" autocapitalize="none">
+          </div>
+          <textarea v-model="editing.context" rows="2" placeholder="как познакомились" style="margin-top:8px"></textarea>
+
+          <div class="meta" style="margin:16px 0 8px">даты</div>
+          <div class="list" v-if="opened && opened.events.length">
+            <button v-for="e in opened.events" :key="e.id" @click="delEvent(e.id)">
+              <span class="bead" style="background:var(--event)"></span>
+              <span>{{ e.title }}</span>
+              <span class="tail">{{ humanDays(e.days) }} · удалить</span>
+            </button>
+          </div>
+          <div class="row" style="margin-top:8px">
+            <input type="text" v-model="newEvent.date" placeholder="12.04" inputmode="numeric" style="flex:0 0 96px">
+            <input type="text" v-model="newEvent.title" placeholder="Событие">
+            <button type="button" class="btn ghost" style="flex:0 0 56px" @click="addEvent">+</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="btns">
+        <button class="btn" :disabled="!editing.name.trim() || saving" @click="saveEdit">Сохранить</button>
+        <button class="btn ghost" @click="editing = null">Отмена</button>
+      </div>
+
+      <div class="danger">
+        <div class="meta">убрать из базы</div>
+        <div class="row" style="margin-top:10px">
+          <button class="btn ghost" :class="{ armed: confirmStep === 'archive' }" @click="archivePerson">
+            {{ confirmStep === 'archive' ? 'Точно в архив?' : 'В архив' }}
+          </button>
+          <button class="btn ghost danger-btn" :class="{ armed: confirmStep === 'delete' }" @click="deletePerson">
+            {{ confirmStep === 'delete' ? 'Точно удалить?' : 'Удалить' }}
+          </button>
+        </div>
+        <p class="hint">Архив прячет человека из карты и напоминаний, но сохраняет историю. Удаление стирает всё безвозвратно — только для дублей и ошибок.</p>
       </div>
     </section>
   </Transition>

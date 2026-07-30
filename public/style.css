@@ -179,3 +179,69 @@ input::placeholder,textarea::placeholder{color:var(--ink-faint);}
 
 .loading{margin:auto;color:var(--ink-faint);font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.12em;}
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important;}}
+
+/* --- правка --- */
+.sheet.edit label:first-of-type{margin-top:8px;}
+.sheet.edit textarea{font-size:15px;}
+.danger{margin-top:28px;padding-top:18px;border-top:1px solid var(--line);}
+.danger-btn{color:var(--risk);border-color:rgba(240,85,110,.35);}
+.btn.armed{background:var(--risk);color:#fff;border-color:var(--risk);font-weight:600;}
+
+/* --- аватары --- */
+.who{display:flex;gap:13px;align-items:flex-start;}
+.ava{
+  width:56px;height:56px;border-radius:50%;flex-shrink:0;overflow:hidden;
+  border:1px solid var(--line);background:var(--field);cursor:pointer;padding:0;
+  display:flex;align-items:center;justify-content:center;
+  font-family:'Unbounded','Golos Text',sans-serif;font-size:20px;color:var(--ink-faint);
+}
+.ava img{width:100%;height:100%;object-fit:cover;display:block;}
+.ava.sm{width:34px;height:34px;font-size:13px;}
+
+/* --- оценка отношений --- */
+.rate{display:flex;gap:4px;align-items:center;margin-top:7px;}
+.rate i,.rate button{
+  width:9px;height:9px;border-radius:50%;background:var(--line);border:0;padding:0;display:block;
+}
+.rate i.on,.rate button.on{background:var(--event);}
+.rate.big{gap:9px;margin-top:4px;}
+.rate.big button{width:22px;height:22px;cursor:pointer;}
+
+/* --- семья и питомцы --- */
+.kin{display:flex;gap:8px;overflow-x:auto;margin-top:9px;padding-bottom:4px;}
+.kin-card{
+  flex:0 0 auto;display:flex;flex-direction:column;align-items:center;gap:5px;
+  padding:11px 13px;border:1px solid var(--line);border-radius:14px;min-width:88px;
+}
+.kin-card b{font-size:12.5px;font-weight:500;}
+.kin-card em{font-style:normal;font-size:10px;color:var(--ink-faint);}
+.kin-row{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--line);}
+.kin-name{display:flex;flex-direction:column;font-size:14.5px;flex:1;min-width:0;}
+.kin-name em{font-style:normal;font-size:11px;color:var(--ink-faint);}
+.mini{
+  border:1px solid var(--line);background:transparent;color:var(--ink-dim);
+  font-family:inherit;font-size:12px;padding:6px 11px;border-radius:9px;cursor:pointer;flex-shrink:0;
+}
+
+/* --- аккордеоны --- */
+.acc{border-bottom:1px solid var(--line);}
+.acc-head{
+  width:100%;display:flex;align-items:center;background:transparent;border:0;cursor:pointer;
+  color:var(--ink);font-family:inherit;font-size:15px;font-weight:500;padding:15px 2px;text-align:left;
+}
+.acc-head i{
+  margin-left:auto;width:7px;height:7px;border-right:1.5px solid var(--ink-faint);
+  border-bottom:1.5px solid var(--ink-faint);transform:rotate(45deg);transition:transform .2s;
+}
+.acc.open .acc-head i{transform:rotate(-135deg);}
+.acc-head .cnt{
+  margin-left:9px;font-family:'JetBrains Mono',monospace;font-size:10px;
+  color:var(--void-deep);background:var(--ink-dim);border-radius:8px;padding:2px 6px;
+}
+.acc-body{padding-bottom:18px;}
+.acc-body label:first-child{margin-top:4px;}
+
+select{
+  width:100%;background:var(--field);border:1px solid var(--line);border-radius:12px;
+  color:var(--ink);font-family:inherit;font-size:16px;padding:13px 14px;outline:none;
+}

@@ -41,13 +41,13 @@ export interface IntakeState {
 
 export function state(): IntakeState {
   const now = today();
-  const total = (db.prepare("SELECT COUNT(*) AS n FROM person WHERE status = 'active'").get() as { n: number }).n;
+  const total = (db.prepare("SELECT COUNT(*) AS n FROM person WHERE status = 'active' AND is_stub = 0").get() as { n: number }).n;
   const addedToday = (db.prepare(
-    "SELECT COUNT(*) AS n FROM person WHERE date(created_at) = ?",
+    "SELECT COUNT(*) AS n FROM person WHERE date(created_at) = ? AND is_stub = 0",
   ).get(now) as { n: number }).n;
   const withoutContact = (db.prepare(`
     SELECT COUNT(*) AS n FROM person p
-    WHERE p.status = 'active'
+    WHERE p.status = 'active' AND p.is_stub = 0
       AND NOT EXISTS (SELECT 1 FROM interaction i WHERE i.person_id = p.id)
   `).get() as { n: number }).n;
 

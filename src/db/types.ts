@@ -24,6 +24,9 @@ export interface Person {
   risk: number | null;
   status: PersonStatus;
   layout_angle: number | null;
+  avatar: string | null;
+  rapport: number | null;
+  is_stub: number;
   created_at: string;
   updated_at: string;
 }
@@ -67,6 +70,7 @@ export interface PersonEvent {
   event_date: string;
   recurring: number;
   lead_days: number;
+  pet_id: number | null;
   handled_for: string | null;
   created_at: string;
 }

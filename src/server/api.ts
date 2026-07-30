@@ -9,6 +9,9 @@ import * as timeline from '../db/repo/timeline.js';
 import * as agenda from '../db/repo/agenda.js';
 import type { Channel } from '../db/types.js';
 import { clusters, place, RING_RADIUS } from './layout.js';
+import * as pets from '../db/repo/pets.js';
+import * as family from '../domain/family.js';
+import * as avatars from './avatars.js';
 
 export const api = new Hono();
 
@@ -78,6 +81,8 @@ api.get('/person/:id', (c) => {
   return c.json({
     ...p,
     circleLabel: CIRCLES[p.circle].label,
+    family: family.familyOf(id),
+    pets: pets.ofOwner(id),
     interval: intervalFor(p.circle, p.target_interval),
     tags: people.tagsOf(id),
     dossier: people.dossierOf(id) ?? null,
@@ -118,6 +123,94 @@ api.post('/person', async (c) => {
   }
 
   return c.json({ id, intake: intake.state() });
+});
+
+api.patch('/person/:id', async (c) => {
+  const id = Number(c.req.param('id'));
+  if (!people.byId(id)) return c.json({ error: 'not found' }, 404);
+
+  const b = await c.req.json<{
+    name?: string; circle?: number; city?: string; telegram?: string; phone?: string;
+    context?: string; interval?: number | null; tags?: string[];
+    dossier?: Record<string, string>; lastContact?: string; rapport?: number | null;
+  }>();
+
+  if (b.name !== undefined && !b.name.trim()) return c.json({ error: 'имя не может быть пустым' }, 400);
+
+  const patch: Record<string, unknown> = {};
+  if (b.name !== undefined) patch['name'] = b.name.trim();
+  if (b.city !== undefined) patch['city'] = b.city.trim();
+  if (b.telegram !== undefined) patch['telegram'] = b.telegram.replace(/^@/, '').trim();
+  if (b.phone !== undefined) patch['phone'] = b.phone.trim();
+  if (b.context !== undefined) patch['met_context'] = b.context.trim();
+  // 0 и null сбрасывают оценку, значения вне 1..5 просто игнорируются,
+  // чтобы опечатка не стёрла уже выставленную.
+  if (b.rapport === null || b.rapport === 0) patch['rapport'] = null;
+  else if (b.rapport !== undefined && b.rapport >= 1 && b.rapport <= 5) patch['rapport'] = b.rapport;
+  if (b.interval !== undefined) patch['target_interval'] = b.interval || null;
+  people.update(id, patch);
+
+  if (b.circle !== undefined && isCircle(Number(b.circle))) people.setCircle(id, Number(b.circle) as 0);
+  if (b.tags !== undefined) people.setTags(id, b.tags);
+  if (b.dossier !== undefined) people.setDossier(id, b.dossier);
+
+  // Дата последнего общения правится через добавление контакта задним числом:
+  // так не теряется история, а last_contact всё так же выводится из неё.
+  if (b.lastContact) {
+    timeline.logInteraction(id, 'message', { on: b.lastContact, summary: 'правка даты' });
+  }
+
+  return c.json({ ok: true });
+});
+
+api.post('/person/:id/archive', (c) => {
+  const id = Number(c.req.param('id'));
+  people.setStatus(id, 'archived');
+  return c.json({ ok: true });
+});
+
+api.post('/person/:id/restore', (c) => {
+  const id = Number(c.req.param('id'));
+  people.setStatus(id, 'active');
+  return c.json({ ok: true });
+});
+
+api.delete('/person/:id', (c) => {
+  const id = Number(c.req.param('id'));
+  const p = people.byId(id);
+  if (!p) return c.json({ error: 'not found' }, 404);
+  // Файлы аватаров — самого человека и его питомцев — вычищаются вместе
+  // с записью: строки питомцев каскадом удалит база, файлы сами не исчезнут.
+  if (p.avatar) avatars.remove(p.avatar);
+  for (const pet of pets.ofOwner(id)) {
+    if (pet.avatar) avatars.remove(pet.avatar);
+  }
+  people.remove(id);
+  return c.json({ ok: true });
+});
+
+api.get('/archived', (c) => c.json(people.archived().map((p) => ({ id: p.id, name: p.name, circle: p.circle }))));
+
+api.post('/person/:id/event', async (c) => {
+  const id = Number(c.req.param('id'));
+  const b = await c.req.json<{ date?: string; title?: string; recurring?: boolean }>();
+  const date = b.date ? parseBirthday(b.date) : null;
+  if (!date) return c.json({ error: 'дата в формате 12.04 или 12.04.1991' }, 400);
+  const title = b.title?.trim() || 'День рождения';
+  agenda.addEvent(id, /рожд/i.test(title) ? 'birthday' : 'custom', date, {
+    title, recurring: b.recurring ?? true,
+  });
+  return c.json({ ok: true });
+});
+
+api.delete('/event/:id', (c) => {
+  agenda.removeEvent(Number(c.req.param('id')));
+  return c.json({ ok: true });
+});
+
+api.delete('/task/:id', (c) => {
+  agenda.removeTask(Number(c.req.param('id')));
+  return c.json({ ok: true });
 });
 
 api.post('/person/:id/contact', async (c) => {
@@ -162,6 +255,112 @@ api.post('/person/:id/task', async (c) => {
 
 api.post('/task/:id/close', (c) => {
   agenda.closeTask(Number(c.req.param('id')));
+  return c.json({ ok: true });
+});
+
+/* ---------- аватары ---------- */
+
+api.post('/person/:id/avatar', async (c) => {
+  const id = Number(c.req.param('id'));
+  if (!people.byId(id)) return c.json({ error: 'not found' }, 404);
+  const { data } = await c.req.json<{ data?: string }>();
+  const file = data ? avatars.save('p', id, data) : null;
+  if (!file) return c.json({ error: 'картинка не принята: нужен jpeg/png до 400 КБ' }, 400);
+  people.setAvatar(id, file);
+  return c.json({ avatar: file });
+});
+
+api.post('/pet/:id/avatar', async (c) => {
+  const id = Number(c.req.param('id'));
+  if (!pets.byId(id)) return c.json({ error: 'not found' }, 404);
+  const { data } = await c.req.json<{ data?: string }>();
+  const file = data ? avatars.save('pet', id, data) : null;
+  if (!file) return c.json({ error: 'картинка не принята' }, 400);
+  pets.setAvatar(id, file);
+  return c.json({ avatar: file });
+});
+
+/* ---------- питомцы ---------- */
+
+api.post('/person/:id/pet', async (c) => {
+  const ownerId = Number(c.req.param('id'));
+  if (!people.byId(ownerId)) return c.json({ error: 'not found' }, 404);
+
+  const b = await c.req.json<{
+    name?: string; species?: string; breed?: string; birthday?: string; note?: string;
+  }>();
+  if (!b.name?.trim()) return c.json({ error: 'нужна кличка' }, 400);
+
+  const birthday = b.birthday ? parseBirthday(b.birthday) : null;
+  const petId = pets.create(ownerId, {
+    name: b.name.trim(), species: b.species?.trim() || null,
+    breed: b.breed?.trim() || null, birthday, note: b.note?.trim() || null,
+  });
+
+  // Дата питомца — это повод написать хозяину, поэтому событие вешается на владельца.
+  // Горизонт не задаётся здесь жёстко: берётся общий default из настроек (/lead).
+  if (birthday) {
+    agenda.addEvent(ownerId, 'custom', birthday, {
+      title: `День рождения ${b.name.trim()}${b.species ? ' (' + b.species.trim() + ')' : ''}`,
+      recurring: true, petId,
+    });
+  }
+  return c.json({ id: petId });
+});
+
+api.patch('/pet/:id', async (c) => {
+  const id = Number(c.req.param('id'));
+  if (!pets.byId(id)) return c.json({ error: 'not found' }, 404);
+  const b = await c.req.json<{ name?: string; species?: string; breed?: string; note?: string }>();
+  pets.update(id, b);
+  return c.json({ ok: true });
+});
+
+api.delete('/pet/:id', (c) => {
+  const pet = pets.byId(Number(c.req.param('id')));
+  if (!pet) return c.json({ error: 'not found' }, 404);
+  if (pet.avatar) avatars.remove(pet.avatar);
+  pets.remove(pet.id);
+  return c.json({ ok: true });
+});
+
+/* ---------- семья ---------- */
+
+api.post('/person/:id/family', async (c) => {
+  const id = Number(c.req.param('id'));
+  if (!people.byId(id)) return c.json({ error: 'not found' }, 404);
+
+  const b = await c.req.json<{ name?: string; role?: family.FamilyRole; birthday?: string; existingId?: number }>();
+  if (!b.role) return c.json({ error: 'нужна роль' }, 400);
+
+  // Если человек уже есть в базе — связываем, а не плодим дубль.
+  if (b.existingId) {
+    family.link(id, Number(b.existingId), b.role);
+    family.rebuildDerived(id);
+    return c.json({ id: Number(b.existingId), created: false });
+  }
+
+  if (!b.name?.trim()) return c.json({ error: 'нужно имя' }, 400);
+  const memberId = family.addMember(id, { name: b.name, role: b.role });
+
+  const bd = b.birthday ? parseBirthday(b.birthday) : null;
+  if (bd) agenda.addEvent(memberId, 'birthday', bd, { recurring: true });
+
+  return c.json({ id: memberId, created: true });
+});
+
+api.delete('/person/:id/family/:memberId', (c) => {
+  const id = Number(c.req.param('id'));
+  const memberId = Number(c.req.param('memberId'));
+  family.unlink(id, memberId);
+  family.rebuildDerived(id);
+  return c.json({ ok: true });
+});
+
+api.post('/person/:id/activate', async (c) => {
+  const id = Number(c.req.param('id'));
+  const { circle } = await c.req.json<{ circle?: number }>().catch((): { circle?: number } => ({}));
+  family.activate(id, isCircle(Number(circle)) ? Number(circle) : 3);
   return c.json({ ok: true });
 });
 

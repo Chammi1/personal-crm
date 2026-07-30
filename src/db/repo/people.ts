@@ -84,13 +84,81 @@ export function appendDossier(id: number, field: DossierField, text: string): vo
   reindex(id);
 }
 
+/** Частичное обновление. Разрешённые поля перечислены явно, чтобы из API нельзя было тронуть лишнее. */
+const UPDATABLE = [
+  'name', 'telegram', 'phone', 'email', 'city',
+  'met_on', 'met_context', 'target_interval',
+  'is_connector', 'is_condenser', 'interest', 'difficulty', 'risk', 'rapport',
+] as const;
+export type UpdatableField = (typeof UPDATABLE)[number];
+
+export function update(id: number, patch: Partial<Record<UpdatableField, unknown>>): void {
+  const fields = Object.keys(patch).filter((k): k is UpdatableField =>
+    (UPDATABLE as readonly string[]).includes(k));
+  if (!fields.length) return;
+
+  const sql = `UPDATE person SET ${fields.map((f) => `${f} = @${f}`).join(', ')}, updated_at = datetime('now') WHERE id = @id`;
+  const params: Record<string, unknown> = { id };
+  for (const f of fields) {
+    const v = patch[f];
+    params[f] = v === '' || v === undefined ? null : v;
+  }
+  db.prepare(sql).run(params);
+  reindex(id);
+}
+
+/** Полная замена блоков досье — в отличие от appendDossier, который дописывает. */
+export function setDossier(id: number, values: Partial<Record<DossierField, string | null>>): void {
+  const fields = Object.keys(values).filter(isDossierField);
+  if (!fields.length) return;
+  const sql = `UPDATE dossier SET ${fields.map((f) => `${f} = @${f}`).join(', ')}, updated_at = datetime('now') WHERE person_id = @id`;
+  const params: Record<string, unknown> = { id };
+  for (const f of fields) params[f] = values[f]?.trim() || null;
+  db.prepare(sql).run(params);
+  reindex(id);
+}
+
+/** Полная замена набора тегов. */
+export const setTags = db.transaction((id: number, tags: string[]): void => {
+  db.prepare('DELETE FROM tag WHERE person_id = ?').run(id);
+  for (const t of tags) {
+    const clean = t.trim().toLowerCase();
+    if (clean) insertTag.run(id, clean);
+  }
+  reindex(id);
+});
+
+/**
+ * Полное удаление вместе со всей историей. Необратимо.
+ * Для «убрать с глаз» есть архив: setStatus(id, 'archived').
+ */
+export function remove(id: number): void {
+  db.prepare('DELETE FROM search_index WHERE person_id = ?').run(id);
+  db.prepare('DELETE FROM person WHERE id = ?').run(id);
+}
+
+export function setAvatar(id: number, file: string): void {
+  db.prepare("UPDATE person SET avatar = ?, updated_at = datetime('now') WHERE id = ?").run(file, id);
+}
+
+export function archived(): Person[] {
+  return db.prepare("SELECT * FROM person WHERE status = 'archived' ORDER BY name").all() as Person[];
+}
+
+/**
+ * Активные люди без карточек-заглушек.
+ * Заглушки — автосозданные родственники: они видны в блоке семьи,
+ * но не занимают место в круге и не порождают напоминаний.
+ */
 export function active(): Person[] {
-  return db.prepare("SELECT * FROM person WHERE status = 'active' ORDER BY circle, name").all() as Person[];
+  return db.prepare(
+    "SELECT * FROM person WHERE status = 'active' AND is_stub = 0 ORDER BY circle, name",
+  ).all() as Person[];
 }
 
 export function countsByCircle(): Record<number, number> {
   const rows = db.prepare(
-    "SELECT circle, COUNT(*) AS n FROM person WHERE status = 'active' GROUP BY circle",
+    "SELECT circle, COUNT(*) AS n FROM person WHERE status = 'active' AND is_stub = 0 GROUP BY circle",
   ).all() as { circle: number; n: number }[];
   const out: Record<number, number> = { 0: 0, 1: 0, 2: 0, 3: 0, 4: 0 };
   for (const r of rows) out[r.circle] = r.n;
@@ -109,6 +177,7 @@ export function withoutContact(limit = 20): Person[] {
   return db.prepare(`
     SELECT p.* FROM person p
     WHERE p.status = 'active'
+      AND p.is_stub = 0
       AND NOT EXISTS (SELECT 1 FROM interaction i WHERE i.person_id = p.id)
     ORDER BY p.circle, p.name
     LIMIT ?
