@@ -4,6 +4,7 @@ import { addDays, daysBetween, nextOccurrence, today } from './dates.js';
 import * as people from '../db/repo/people.js';
 import * as timeline from '../db/repo/timeline.js';
 import * as agenda from '../db/repo/agenda.js';
+import * as collective from '../db/repo/collective.js';
 import * as family from './family.js';
 
 export type SignalKind = 'missed' | 'event' | 'owed' | 'risk' | 'late';
@@ -19,6 +20,8 @@ export interface Signal {
   priority: number;
   eventId?: number;
   taskId?: number;
+  /** коллективное событие: одно «✓ закрыть» гасит повод у всего кластера */
+  collectiveId?: number;
   occurrence?: string;
 }
 
@@ -113,6 +116,29 @@ export function collect(now = today()): Signal[] {
           days: left, size: 1, priority: 900, eventId: e.id, occurrence: next,
         });
       }
+    }
+  }
+
+  // --- коллективные события: один повод на весь кластер
+  //
+  // Сигнал получает каждый активный человек с тегом события (без тега — все).
+  // Закрытие одно на всех: «поздравил клуб» гасит повод целиком.
+  for (const ce of collective.all()) {
+    const next = nextOccurrence(ce.event_date, ce.recurring === 1, now);
+    const left = daysBetween(now, next);
+    if (left < 0 || left > ce.lead_days || ce.handled_for === next) continue;
+
+    const audience = ce.tag ? people.withTag(ce.tag) : active;
+    for (const person of audience) {
+      if (isSnoozed(person.id)) continue;
+      out.push({
+        person, kind: 'event',
+        why: ce.title + (ce.tag ? ` · весь кластер #${ce.tag}` : ' · вся сеть'),
+        days: left,
+        size: growth(left, ce.lead_days),
+        priority: 500 - left,
+        collectiveId: ce.id, occurrence: next,
+      });
     }
   }
 

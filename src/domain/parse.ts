@@ -12,6 +12,8 @@ export interface ParsedPerson {
   lastContact?: string; // YYYY-MM-DD — когда последний раз общались
   tags: string[];
   context?: string;
+  /** кто представил — имя для поиска по базе (через:Тимур) */
+  viaName?: string;
 }
 
 /**
@@ -61,6 +63,7 @@ export function parsePerson(input: string): ParsedPerson | null {
           out.lastContact = last;
           continue;
         }
+        case 'через': case 'via': out.viaName = value.replace(/_/g, ' '); continue;
         case 'тг': case 'tg': out.telegram = value.replace(/^@/, ''); continue;
         case 'тел': case 'phone': out.phone = value; continue;
         case 'город': case 'city': out.city = value; continue;

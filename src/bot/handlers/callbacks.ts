@@ -6,6 +6,7 @@ import type { Channel } from '../../db/types.js';
 import * as people from '../../db/repo/people.js';
 import * as timeline from '../../db/repo/timeline.js';
 import * as agenda from '../../db/repo/agenda.js';
+import * as collective from '../../db/repo/collective.js';
 import * as ui from '../ui.js';
 import { clearPending, setCurrent, setPending } from '../state.js';
 
@@ -118,6 +119,18 @@ callbacks.callbackQuery(/^ev:(\d+):(\d{4}-\d{2}-\d{2})$/, async (ctx) => {
 callbacks.callbackQuery(/^tk:(\d+)$/, async (ctx) => {
   agenda.closeTask(Number(ctx.match[1]));
   await ctx.answerCallbackQuery('Обещание закрыто');
+});
+
+// Коллективное событие: одно закрытие гасит повод у всего кластера.
+callbacks.callbackQuery(/^cev:(\d+):(\d{4}-\d{2}-\d{2})$/, async (ctx) => {
+  collective.markHandled(Number(ctx.match[1]), ctx.match[2]!);
+  await ctx.answerCallbackQuery('Закрыто для всего кластера');
+});
+
+callbacks.callbackQuery(/^cevdel:(\d+)$/, async (ctx) => {
+  collective.remove(Number(ctx.match[1]));
+  await ctx.answerCallbackQuery('Событие удалено');
+  if (ctx.callbackQuery.message) await ctx.editMessageText('Коллективное событие удалено.');
 });
 
 /** Обработка свободного ввода, которого ждала одна из кнопок. */

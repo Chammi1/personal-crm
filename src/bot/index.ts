@@ -29,8 +29,11 @@ export async function setCommandMenu(): Promise<void> {
     { command: 'today', description: 'Кому написать сегодня' },
     { command: 'add', description: 'Добавить человека' },
     { command: 'find', description: 'Найти по имени, тегу, факту' },
+    { command: 'brief', description: 'Шпаргалка перед разговором' },
+    { command: 'cevent', description: 'Коллективное событие кластера' },
     { command: 'stats', description: 'Заполненность кругов' },
     { command: 'app', description: 'Открыть карту кругов' },
+    { command: 'backup', description: 'Файл базы в этот чат' },
     { command: 'help', description: 'Как пользоваться' },
   ]);
 }

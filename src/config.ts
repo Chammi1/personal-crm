@@ -22,4 +22,6 @@ export const config = {
   allowInsecure: process.env.ALLOW_INSECURE === '1',
   // Общий секрет для приёма данных из СОТА CRM. Пусто = синхронизация выключена.
   syncToken: process.env.SYNC_TOKEN ?? '',
+  // Ключ OpenAI для расшифровки голосовых. Пусто = голосовые не расшифровываются.
+  openaiKey: process.env.OPENAI_API_KEY ?? '',
 };

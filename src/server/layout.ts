@@ -26,10 +26,10 @@ export interface Cluster { tag: string; index: number }
 export function clusters(all: Person[]): { list: string[]; of: (id: number) => number } {
   const counts = new Map<string, number>();
   const primary = new Map<number, string>();
+  const tagsMap = people.tagsOfAll();   // один запрос вместо N+1
 
   for (const p of all) {
-    const tags = people.tagsOf(p.id);
-    const first = tags[0];
+    const first = tagsMap.get(p.id)?.[0];
     if (first) {
       primary.set(p.id, first);
       counts.set(first, (counts.get(first) ?? 0) + 1);

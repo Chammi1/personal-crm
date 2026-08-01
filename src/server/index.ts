@@ -1,6 +1,7 @@
 import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { Hono } from 'hono';
+import type { MiddlewareHandler } from 'hono';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createRequire } from 'node:module';
@@ -12,6 +13,26 @@ import { AVATAR_DIR } from './avatars.js';
 
 const require = createRequire(import.meta.url);
 const app = new Hono();
+
+/**
+ * Ограничение частоты: 240 запросов в минуту с одного адреса на /api и /sync.
+ * Подпись initData — основная защита, это страховка от перебора и залипших циклов.
+ */
+const rateWindow = new Map<string, { count: number; since: number }>();
+const rateLimit: MiddlewareHandler = async (c, next) => {
+  const ip = c.req.header('x-forwarded-for')?.split(',')[0]?.trim() ?? 'local';
+  const nowMs = Date.now();
+  const slot = rateWindow.get(ip);
+  if (!slot || nowMs - slot.since > 60_000) {
+    rateWindow.set(ip, { count: 1, since: nowMs });
+  } else if (++slot.count > 240) {
+    return c.json({ error: 'слишком часто, подожди минуту' }, 429);
+  }
+  if (rateWindow.size > 1000) rateWindow.clear(); // страховка от распухания
+  return next();
+};
+app.use('/api/*', rateLimit);
+app.use('/sync/*', rateLimit);
 
 /**
  * Доступ к API только владельцу по подписанной initData.

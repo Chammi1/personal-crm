@@ -87,7 +87,7 @@ export function appendDossier(id: number, field: DossierField, text: string): vo
 /** Частичное обновление. Разрешённые поля перечислены явно, чтобы из API нельзя было тронуть лишнее. */
 const UPDATABLE = [
   'name', 'telegram', 'phone', 'email', 'city',
-  'met_on', 'met_context', 'target_interval',
+  'met_on', 'met_context', 'met_via', 'target_interval',
   'is_connector', 'is_condenser', 'interest', 'difficulty', 'risk', 'rapport',
 ] as const;
 export type UpdatableField = (typeof UPDATABLE)[number];
@@ -163,6 +163,62 @@ export function countsByCircle(): Record<number, number> {
   const out: Record<number, number> = { 0: 0, 1: 0, 2: 0, 3: 0, 4: 0 };
   for (const r of rows) out[r.circle] = r.n;
   return out;
+}
+
+/** Кого этот человек привёл в сеть (у кого он met_via). */
+export function introduced(id: number): Person[] {
+  return db.prepare(
+    "SELECT * FROM person WHERE met_via = ? AND status = 'active' ORDER BY name",
+  ).all(id) as Person[];
+}
+
+/** Топ коннекторов: кто скольких привёл. */
+export function connectorTop(limit = 5): { person: Person; n: number }[] {
+  const rows = db.prepare(`
+    SELECT via.*, COUNT(p.id) AS n FROM person p
+    JOIN person via ON via.id = p.met_via
+    WHERE p.status = 'active' AND via.status = 'active'
+    GROUP BY p.met_via ORDER BY n DESC LIMIT ?
+  `).all(limit) as (Person & { n: number })[];
+  return rows.map((r) => {
+    const { n, ...person } = r;
+    return { person: person as Person, n };
+  });
+}
+
+/** Теги всех активных одним запросом — вместо N+1 при сборке карты и справочника. */
+export function tagsOfAll(): Map<number, string[]> {
+  const rows = db.prepare(`
+    SELECT t.person_id, t.tag FROM tag t
+    JOIN person p ON p.id = t.person_id
+    WHERE p.status = 'active'
+    ORDER BY t.tag
+  `).all() as { person_id: number; tag: string }[];
+  const out = new Map<number, string[]>();
+  for (const r of rows) {
+    const list = out.get(r.person_id);
+    if (list) list.push(r.tag);
+    else out.set(r.person_id, [r.tag]);
+  }
+  return out;
+}
+
+/** Род деятельности всех одним запросом — для справочника. */
+export function occupationsOfAll(): Map<number, string> {
+  const rows = db.prepare(
+    "SELECT person_id, occupation FROM dossier WHERE occupation IS NOT NULL AND occupation != ''",
+  ).all() as { person_id: number; occupation: string }[];
+  return new Map(rows.map((r) => [r.person_id, r.occupation]));
+}
+
+/** Активные люди с тегом — аудитория коллективного события. */
+export function withTag(tag: string): Person[] {
+  return db.prepare(`
+    SELECT p.* FROM person p
+    JOIN tag t ON t.person_id = p.id
+    WHERE t.tag = ? AND p.status = 'active' AND p.is_stub = 0
+    ORDER BY p.circle, p.name
+  `).all(tag.toLowerCase()) as Person[];
 }
 
 /** Все теги с частотой — для подсказок в форме добавления. */

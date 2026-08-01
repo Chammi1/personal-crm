@@ -29,6 +29,17 @@ export function takePending(): Pending | null {
   }
 }
 
+/** Подглядеть ожидание, не съедая его — для тестов и диагностики. */
+export function getPending(): Pending | null {
+  const raw = settings.get(PENDING_KEY, '');
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as Pending;
+  } catch {
+    return null;
+  }
+}
+
 export function clearPending(): void {
   settings.set(PENDING_KEY, '');
 }

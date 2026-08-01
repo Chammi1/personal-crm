@@ -40,6 +40,15 @@ export function personCard(id: number): { text: string; keyboard: InlineKeyboard
   );
   if (tags.length) lines.push(`Теги: ${tags.map(esc).join(', ')}`);
   if (p.met_context) lines.push(`Знакомство: ${esc(p.met_context)}${p.met_on ? ', ' + humanDate(p.met_on) : ''}`);
+  // связи по знакомству: кто представил и кого привёл сам
+  if (p.met_via) {
+    const via = people.byId(p.met_via);
+    if (via) lines.push(`Представил: ${esc(via.name)}`);
+  }
+  const brought = people.introduced(id);
+  if (brought.length) {
+    lines.push(`Привёл в сеть ${brought.length}: ${brought.slice(0, 5).map((b) => esc(b.name.split(' ')[0]!)).join(', ')}${brought.length > 5 ? '…' : ''}`);
+  }
 
   const dossierBlocks: [string, string | null | undefined][] = [
     ['Семья', d?.family], ['Работа', d?.occupation], ['Увлечения', d?.recreation],
@@ -155,11 +164,14 @@ export function digest(
 
   if (intakeTail) lines.push('', intakeTail);
 
-  // По строке на позицию: открыть карточку + сразу закрыть повод, не заходя в неё.
+  // По строке на позицию: открыть карточку, записать контакт, закрыть повод —
+  // всё из дайджеста, не проваливаясь в карточку.
   const keyboard = new InlineKeyboard();
   shown.forEach((s, i) => {
     keyboard.text(`${i + 1}. ${s.person.name.split(' ')[0]}`, `p:${s.person.id}`);
+    keyboard.text('✍', `c:${s.person.id}:message`);
     if (s.eventId && s.occurrence) keyboard.text('✓ закрыть', `ev:${s.eventId}:${s.occurrence}`);
+    else if (s.collectiveId && s.occurrence) keyboard.text('✓ для всех', `cev:${s.collectiveId}:${s.occurrence}`);
     else if (s.taskId) keyboard.text('✓ сделано', `tk:${s.taskId}`);
     keyboard.row();
   });

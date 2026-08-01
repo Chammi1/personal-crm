@@ -178,6 +178,15 @@ const App = {
     function dirReset() {
       dirQ.value = ''; dirCity.value = ''; dirTag.value = ''; dirCircle.value = null;
     }
+
+    /** Быстрый лог «написал» прямо со строки списка, без открытия карточки. */
+    async function quickLog(p) {
+      await call('/person/' + p.id + '/contact', {
+        method: 'POST', body: JSON.stringify({ channel: 'message' }),
+      });
+      flash('Записал: переписка с ' + p.name.split(' ')[0]);
+      await load();
+    }
     const dirHasFilter = computed(() =>
       dirQ.value || dirCity.value || dirTag.value || dirCircle.value !== null);
 
@@ -318,6 +327,13 @@ const App = {
       if (d.gift_ideas) rows.push({ ic: '🎁', b: d.gift_ideas, s: 'идеи подарка' });
       if (d.avoid) rows.push({ ic: '⛔', b: d.avoid, s: 'не трогать' });
       if (p.met_context) rows.push({ ic: '👋', b: p.met_context, s: 'как познакомились' });
+      if (p.metVia) rows.push({ ic: '🔗', b: 'Представил: ' + p.metVia.name, s: 'связь по знакомству', personId: p.metVia.id });
+      if (p.introduced && p.introduced.length) {
+        rows.push({
+          ic: '🌱', b: 'Привёл в сеть: ' + p.introduced.map((b) => b.name.split(' ')[0]).join(', '),
+          s: p.introduced.length + ' ' + plural(p.introduced.length, 'человек', 'человека', 'человек') + ' — коннектор',
+        });
+      }
       return rows;
     });
 
@@ -639,7 +655,7 @@ const App = {
       sectorLabel, sectorEdge, lit, ghosts, nodeRadius, nodeColor, showLabel, labelPos, shortWhy,
       headline, subline, circleLoad, open, act, toggleTag, addNewTag, save, anotherPrompt, load, flash,
       dir, dirQ, dirCity, dirTag, dirCircle, dirMore, dirCities, dirTags,
-      dirFiltered, dirSub, dirReset, dirHasFilter, loadDir,
+      dirFiltered, dirSub, dirReset, dirHasFilter, loadDir, quickLog,
       editing, confirmStep, newEvent, archivedList, DOSSIER_BLOCKS, ROLES,
       block, toggleBlock, newMember, newPet,
       uploadAvatar, addMember, delMember, activateMember, addPet, delPet,
@@ -918,6 +934,7 @@ const App = {
             </span>
             <span class="kin-name">{{ p.name }}<em>{{ dirSub(p) || 'круг ' + p.circle }}</em></span>
             <span class="tail">{{ p.silent !== null ? p.silent + ' дн' : 'нет даты' }}</span>
+            <span class="mini" @click.stop="quickLog(p)" title="Записать переписку">✍</span>
           </button>
         </div>
         <p class="hint" v-if="!dirFiltered.length">Никого не нашлось. Попробуй убрать фильтры.</p>
@@ -991,7 +1008,8 @@ const App = {
       <!-- ===== вкладка ДОСЬЕ ===== -->
       <template v-if="cardTab === 'dossier'">
         <div v-if="dossierRows.length">
-          <div class="frow" v-for="(r, i) in dossierRows" :key="i">
+          <div class="frow" v-for="(r, i) in dossierRows" :key="i"
+               :style="r.personId ? 'cursor:pointer' : ''" @click="r.personId && open(r.personId)">
             <div class="ic">{{ r.ic }}</div>
             <div><b>{{ r.b }}</b><span>{{ r.s }}</span></div>
           </div>

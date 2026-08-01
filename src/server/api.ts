@@ -70,6 +70,8 @@ api.get('/state', (c) => {
 api.get('/people', (c) => {
   const now = today();
   const lastContact = timeline.lastContactMap();
+  const tagsMap = people.tagsOfAll();           // батч вместо двух запросов
+  const occMap = people.occupationsOfAll();     // на каждого человека
   const list = people.active().map((p) => {
     const lastOn = lastContact.get(p.id) ?? null;
     return {
@@ -78,8 +80,8 @@ api.get('/people', (c) => {
       circle: p.circle,
       city: p.city,
       avatar: p.avatar,
-      tags: people.tagsOf(p.id),
-      occupation: people.dossierOf(p.id)?.occupation ?? null,
+      tags: tagsMap.get(p.id) ?? [],
+      occupation: occMap.get(p.id) ?? null,
       lastOn,
       silent: lastOn ? daysBetween(lastOn, now) : null,
       health: lastOn ? signals.healthLabel(signals.ratio(p, lastOn, now)) : null,
@@ -123,9 +125,15 @@ api.get('/person/:id', (c) => {
     return { ...m, birthday: bdOn, birthdayDays: bdDays, age };
   });
 
+  // связи по знакомству: кто представил этого человека и кого он привёл сам
+  const via = p.met_via ? people.byId(p.met_via) : undefined;
+  const brought = people.introduced(id);
+
   return c.json({
     ...p,
     circleLabel: CIRCLES[p.circle].label,
+    metVia: via ? { id: via.id, name: via.name } : null,
+    introduced: brought.map((b) => ({ id: b.id, name: b.name })),
     family: familyView,
     pets: pets.ofOwner(id),
     interval: intervalFor(p.circle, p.target_interval),
