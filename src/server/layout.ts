@@ -36,11 +36,13 @@ export function clusters(all: Person[]): { list: string[]; of: (id: number) => n
     }
   }
 
+  // «Прочее» есть ВСЕГДА: иначе при шести и более популярных тегах люди
+  // с редким тегом или без тегов рисовались бы в чужом секторе.
   const list = [...counts.entries()]
     .sort((a, b) => b[1] - a[1])
-    .slice(0, 6)
+    .slice(0, 5)
     .map(([tag]) => tag);
-  if (list.length < 6) list.push('прочее');
+  list.push('прочее');
 
   const indexOf = new Map(list.map((t, i) => [t, i]));
   return {

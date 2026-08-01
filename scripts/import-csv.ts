@@ -8,12 +8,13 @@
  *   last_contact — YYYY-MM-DD, дата последнего общения; без неё человек сразу уйдёт в просрочку
  */
 import { readFileSync } from 'node:fs';
-import { migrate } from '../src/db/index.js';
+import { db, migrate } from '../src/db/index.js';
 import { isCircle } from '../src/domain/circles.js';
 import { parseBirthday } from '../src/domain/parse.js';
 import * as people from '../src/db/repo/people.js';
 import * as timeline from '../src/db/repo/timeline.js';
 import * as agenda from '../src/db/repo/agenda.js';
+import * as external from '../src/db/repo/external.js';
 
 function parseCSV(text: string): Record<string, string>[] {
   const rows: string[][] = [];
@@ -50,9 +51,23 @@ migrate();
 const rows = parseCSV(readFileSync(file, 'utf8'));
 let added = 0, skipped = 0;
 
+const byName = db.prepare("SELECT id FROM person WHERE name = ? AND status = 'active' LIMIT 1");
+
 for (const r of rows) {
   const name = r['name'];
   if (!name) { skipped++; continue; }
+
+  const telegram = (r['telegram'] || '').replace(/^@/, '') || null;
+  const phone = r['phone'] || null;
+
+  // Дедупликация: повторный прогон того же файла не должен задваивать базу.
+  const dup = external.matchByContacts({ telegram, phone })
+    ?? (byName.get(name) as { id: number } | undefined);
+  if (dup) {
+    console.log(`пропуск: ${name} уже в базе (#${dup.id})`);
+    skipped++;
+    continue;
+  }
 
   const circleRaw = Number(r['circle'] ?? 3);
   const circle = isCircle(circleRaw) ? circleRaw : 3;
@@ -61,8 +76,8 @@ for (const r of rows) {
     name,
     circle,
     city: r['city'] || null,
-    telegram: (r['telegram'] || '').replace(/^@/, '') || null,
-    phone: r['phone'] || null,
+    telegram,
+    phone,
     met_context: r['context'] || null,
     tags: (r['tags'] || '').split(';').map((t) => t.trim()).filter(Boolean),
   });

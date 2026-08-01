@@ -447,6 +447,16 @@ const App = {
       flash('Теперь полноценная карточка');
     }
 
+    /** «Поздравил» из вкладки «Даты»: повод закрывается и не всплывает в этом году. */
+    async function closeOccurrence(d) {
+      await call('/event/' + d.eventId + '/close', {
+        method: 'POST', body: JSON.stringify({ occurrence: d.next }),
+      });
+      flash('Закрыто — в этом году больше не напомнит');
+      await open(opened.value.id);
+      await load();
+    }
+
     /** «В круг» прямо из карточки, без захода в правку. */
     async function activateFromCard(id) {
       await call('/person/' + id + '/activate', { method: 'POST', body: JSON.stringify({ circle: 3 }) });
@@ -625,7 +635,7 @@ const App = {
       WHEN, iso, humanDate, humanDays, plural, KIND, HEALTH,
       STEP_TITLES, wNext, wBack,
       cardTab, focusText, dossierRows, historyRows, touchesHalfYear, dateRows,
-      calDay, calMon, activateFromCard, pickCircle, setCircleFromCard,
+      calDay, calMon, activateFromCard, pickCircle, setCircleFromCard, closeOccurrence,
       sectorLabel, sectorEdge, lit, ghosts, nodeRadius, nodeColor, showLabel, labelPos, shortWhy,
       headline, subline, circleLoad, open, act, toggleTag, addNewTag, save, anotherPrompt, load, flash,
       dir, dirQ, dirCity, dirTag, dirCircle, dirMore, dirCities, dirTags,
@@ -1074,6 +1084,7 @@ const App = {
             <span>{{ d.sub }}</span>
           </div>
           <div class="in" :class="{ soon: d.days <= 14 }">{{ humanDays(d.days) }}</div>
+          <button class="zap" v-if="d.eventId && d.days <= 30" @click="closeOccurrence(d)" title="Закрыть повод">✓</button>
         </div>
         <p class="hint" v-if="!dateRows.length" style="margin-top:14px">
           Дат пока нет. День рождения, защита, переезд — добавляются в правке, в блоке «Контакты и даты».

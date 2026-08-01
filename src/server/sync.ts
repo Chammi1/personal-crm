@@ -133,7 +133,13 @@ sync.post('/person', async (c) => {
       met_context: clean(b.context),
     }));
   }
-  changed.push(...fillBlanks(people.byId(personId)!, { address: clean(b.address) }));
+  // email и address идут для всех, включая только что созданных:
+  // people.create() их не принимает, и без этого email первого синка терялся,
+  // а matchByContacts по почте потом никогда не срабатывал.
+  changed.push(...fillBlanks(people.byId(personId)!, {
+    address: clean(b.address),
+    email: contacts.email,
+  }));
 
   // 3. Теги — накапливаются, не затираются. Исключение: явно снятые внешней
   // системой (клиент купил — тег «лид» больше не про него).

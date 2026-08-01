@@ -6,6 +6,11 @@ function required(name: string): string {
   return v;
 }
 
+// TZ процесса выравнивается с настройкой ДО первых вызовов Date: иначе в
+// контейнере без TZ крон дайджеста шёл бы по Москве (fallback ниже), а расчёт
+// дат — по UTC, и утренняя рассылка строилась бы на «вчера».
+process.env.TZ = process.env.TZ ?? 'Europe/Moscow';
+
 export const config = {
   botToken: required('BOT_TOKEN'),
   ownerId: Number(required('OWNER_ID')),

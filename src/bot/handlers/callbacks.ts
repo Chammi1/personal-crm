@@ -112,7 +112,7 @@ callbacks.callbackQuery(/^cr:(\d+):(\d)$/, async (ctx) => {
 
 callbacks.callbackQuery(/^ev:(\d+):(\d{4}-\d{2}-\d{2})$/, async (ctx) => {
   agenda.markEventHandled(Number(ctx.match[1]), ctx.match[2]!);
-  await ctx.answerCallbackQuery('Событие закрыто');
+  await ctx.answerCallbackQuery('Закрыто — в этом году больше не всплывёт');
 });
 
 callbacks.callbackQuery(/^tk:(\d+)$/, async (ctx) => {
@@ -137,12 +137,19 @@ export async function handlePendingInput(
 
   if (pending.type === 'task') {
     const dueMatch = text.match(/\sдо\s+(\S+)$/i);
-    const due = dueMatch ? parseBirthday(dueMatch[1]!) : null;
+    const dueRaw = dueMatch ? parseBirthday(dueMatch[1]!) : null;
+    // Бот сам предлагает формат «до 30.07» — без года. Парсер вернёт 1900,
+    // и без нормализации срок молча терялся, обещание висело бессрочным.
+    let due: string | null = null;
+    if (dueRaw) {
+      due = dueRaw.startsWith('1900') ? String(new Date().getFullYear()) + dueRaw.slice(4) : dueRaw;
+      if (due < today()) due = String(Number(due.slice(0, 4)) + 1) + due.slice(4);
+    }
     const body = (dueMatch ? text.slice(0, dueMatch.index) : text)
       .replace(/^(я|он|она|они)\s+/i, '').trim();
     const direction = /^(я)\b/i.test(text) ? 'i_owe' : /^(он|она|они)\b/i.test(text) ? 'they_owe' : 'i_owe';
-    agenda.addTask(id, direction, body, due && !due.startsWith('1900') ? due : null);
-    await ctx.reply('Обещание записано.');
+    agenda.addTask(id, direction, body, due);
+    await ctx.reply(due ? `Обещание записано, срок — ${due.split('-').reverse().join('.')}.` : 'Обещание записано.');
   }
 
   if (pending.type === 'event') {
@@ -154,8 +161,7 @@ export async function handlePendingInput(
     }
     const title = rest.join(' ') || 'Событие';
     const recurring = date.startsWith('1900') || !/\d{4}-/.test(first ?? '');
-    const stored = date.startsWith('1900') ? date : date;
-    agenda.addEvent(id, /рожд/i.test(title) ? 'birthday' : 'custom', stored, { title, recurring });
+    agenda.addEvent(id, /рожд/i.test(title) ? 'birthday' : 'custom', date, { title, recurring });
     await ctx.reply('Дата записана.');
   }
 

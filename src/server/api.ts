@@ -268,6 +268,17 @@ api.delete('/event/:id', (c) => {
   return c.json({ ok: true });
 });
 
+/** Закрыть конкретное наступление события: «поздравил» — и повод не всплывает в этом году. */
+api.post('/event/:id/close', async (c) => {
+  const id = Number(c.req.param('id'));
+  const { occurrence } = await c.req.json<{ occurrence?: string }>().catch(() => ({} as { occurrence?: string }));
+  if (!occurrence || !/^\d{4}-\d{2}-\d{2}$/.test(occurrence)) {
+    return c.json({ error: 'нужна дата наступления YYYY-MM-DD' }, 400);
+  }
+  agenda.markEventHandled(id, occurrence);
+  return c.json({ ok: true });
+});
+
 api.delete('/task/:id', (c) => {
   agenda.removeTask(Number(c.req.param('id')));
   return c.json({ ok: true });

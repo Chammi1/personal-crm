@@ -1,7 +1,7 @@
 import { InlineKeyboard } from 'grammy';
 import type { Person } from '../db/types.js';
 import { CIRCLES, intervalFor } from '../domain/circles.js';
-import { dayMonth, daysBetween, humanDate, humanDays, plural, today } from '../domain/dates.js';
+import { addDays, dayMonth, daysBetween, humanDate, humanDays, nextOccurrence, plural, today } from '../domain/dates.js';
 import { healthLabel, ratio, type Signal, type SignalKind } from '../domain/signals.js';
 import * as people from '../db/repo/people.js';
 import * as timeline from '../db/repo/timeline.js';
@@ -59,7 +59,9 @@ export function personCard(id: number): { text: string; keyboard: InlineKeyboard
     for (const e of events) {
       const title = e.title ?? (e.kind === 'birthday' ? 'День рождения' : 'Событие');
       const when = e.recurring ? dayMonth(e.event_date) : humanDate(e.event_date);
-      const year = e.recurring && !e.event_date.startsWith('1900') ? `, ${e.event_date.slice(0, 4)} г.р.` : '';
+      // «г.р.» — только про рождение; у годовщины год означает «с какого года»
+      const y = e.event_date.slice(0, 4);
+      const year = e.recurring === 1 && y !== '1900' ? (e.kind === 'birthday' ? `, ${y} г.р.` : `, с ${y}`) : '';
       lines.push(`${title} — ${when}${year}`);
     }
   }
@@ -84,6 +86,30 @@ export function personCard(id: number): { text: string; keyboard: InlineKeyboard
     .text('Заметка', `n:${id}`).text('Обещание', `t:${id}`).text('Дата', `e:${id}`)
     .row()
     .text('Отложить 7 дн', `sn:${id}:7`).text('Круг', `cr:${id}`);
+
+  // Кнопки закрытия активных поводов: событие в горизонте или только что
+  // прошедшее, незакрытые обещания. Без них handled_for некому выставить,
+  // и «пропущено» висит наверху дайджеста 4 дня после поздравления.
+  const cut = (s: string): string => (s.length > 24 ? s.slice(0, 23) + '…' : s);
+  for (const e of events) {
+    const title = e.title ?? (e.kind === 'birthday' ? 'День рождения' : 'Событие');
+    const next = nextOccurrence(e.event_date, e.recurring === 1, now);
+    const left = daysBetween(now, next);
+    if (left >= 0 && left <= e.lead_days && e.handled_for !== next) {
+      keyboard.row().text(`✓ ${cut(title)} — закрыть`, `ev:${e.id}:${next}`);
+    } else if (e.recurring === 1) {
+      const prev = nextOccurrence(e.event_date, true, addDays(now, -4));
+      const passed = daysBetween(prev, now);
+      if (passed > 0 && passed <= 4 && e.handled_for !== prev) {
+        keyboard.row().text(`✓ ${cut(title)} — закрыть`, `ev:${e.id}:${prev}`);
+      }
+    } else if (left < 0 && left >= -4 && e.handled_for !== next) {
+      keyboard.row().text(`✓ ${cut(title)} — закрыть`, `ev:${e.id}:${next}`);
+    }
+  }
+  for (const t of tasks.slice(0, 3)) {
+    keyboard.row().text(`✓ ${cut(t.body)} — сделано`, `tk:${t.id}`);
+  }
 
   return { text: lines.join('\n'), keyboard };
 }
@@ -129,10 +155,13 @@ export function digest(
 
   if (intakeTail) lines.push('', intakeTail);
 
+  // По строке на позицию: открыть карточку + сразу закрыть повод, не заходя в неё.
   const keyboard = new InlineKeyboard();
   shown.forEach((s, i) => {
     keyboard.text(`${i + 1}. ${s.person.name.split(' ')[0]}`, `p:${s.person.id}`);
-    if (i % 2 === 1) keyboard.row();
+    if (s.eventId && s.occurrence) keyboard.text('✓ закрыть', `ev:${s.eventId}:${s.occurrence}`);
+    else if (s.taskId) keyboard.text('✓ сделано', `tk:${s.taskId}`);
+    keyboard.row();
   });
 
   return { text: lines.join('\n'), keyboard };

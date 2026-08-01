@@ -41,9 +41,13 @@ const digits = (s: string | null | undefined): string => (s ?? '').replace(/\D/g
 export function matchByContacts(
   c: { telegram?: string | null; phone?: string | null; email?: string | null },
 ): Person | undefined {
+  // Только живые полноценные карточки: матч на архивную или заглушку
+  // привязал бы внешнего клиента к невидимой записи.
+  const LIVE = "status = 'active' AND is_stub = 0";
+
   const tg = (c.telegram ?? '').replace(/^@/, '').trim().toLowerCase();
   if (tg) {
-    const hit = db.prepare('SELECT * FROM person WHERE lower(telegram) = ? LIMIT 1')
+    const hit = db.prepare(`SELECT * FROM person WHERE lower(telegram) = ? AND ${LIVE} LIMIT 1`)
       .get(tg) as Person | undefined;
     if (hit) return hit;
   }
@@ -53,7 +57,7 @@ export function matchByContacts(
     // Телефоны в базе записаны как попало («+7 900…», «8900…»), поэтому
     // сравниваем последние 10 цифр уже в JS. База личная, счёт на сотни строк.
     const tail = phone.slice(-10);
-    const rows = db.prepare("SELECT * FROM person WHERE phone IS NOT NULL AND phone != ''")
+    const rows = db.prepare(`SELECT * FROM person WHERE phone IS NOT NULL AND phone != '' AND ${LIVE}`)
       .all() as Person[];
     const hit = rows.find((p) => digits(p.phone).slice(-10) === tail);
     if (hit) return hit;
@@ -61,7 +65,7 @@ export function matchByContacts(
 
   const email = (c.email ?? '').trim().toLowerCase();
   if (email) {
-    const hit = db.prepare('SELECT * FROM person WHERE lower(email) = ? LIMIT 1')
+    const hit = db.prepare(`SELECT * FROM person WHERE lower(email) = ? AND ${LIVE} LIMIT 1`)
       .get(email) as Person | undefined;
     if (hit) return hit;
   }

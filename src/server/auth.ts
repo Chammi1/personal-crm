@@ -1,4 +1,4 @@
-import { createHmac } from 'node:crypto';
+import { createHmac, timingSafeEqual } from 'node:crypto';
 import { config } from '../config.js';
 
 /**
@@ -20,8 +20,10 @@ export function verifyInitData(initData: string): { ok: boolean; userId?: number
     .join('\n');
 
   const secret = createHmac('sha256', 'WebAppData').update(config.botToken).digest();
-  const signature = createHmac('sha256', secret).update(checkString).digest('hex');
-  if (signature !== hash) return { ok: false };
+  const signature = createHmac('sha256', secret).update(checkString).digest();
+  // Сравнение за постоянное время — как в sync.ts; обычный !== даёт тайминг-утечку.
+  const given = Buffer.from(hash, 'hex');
+  if (given.length !== signature.length || !timingSafeEqual(given, signature)) return { ok: false };
 
   // Протухшие данные не принимаем: 24 часа с запасом.
   const authDate = Number(params.get('auth_date') ?? 0);
