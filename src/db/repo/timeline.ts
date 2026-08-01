@@ -16,6 +16,13 @@ export function logInteraction(
   return Number(info.lastInsertRowid);
 }
 
+/** Лента касаний для вкладки «История» в карточке. */
+export function interactionsOf(personId: number, limit = 40): Interaction[] {
+  return db.prepare(
+    'SELECT * FROM interaction WHERE person_id = ? ORDER BY happened_on DESC, id DESC LIMIT ?',
+  ).all(personId, limit) as Interaction[];
+}
+
 export function lastInteraction(personId: number): Interaction | undefined {
   return db.prepare(
     'SELECT * FROM interaction WHERE person_id = ? ORDER BY happened_on DESC, id DESC LIMIT 1',

@@ -104,10 +104,29 @@ api.get('/person/:id', (c) => {
     };
   });
 
+  // Семья с датами рождения: возраст считается из года (1900 = год неизвестен),
+  // а до дня рождения — дни через ближайшее наступление.
+  const familyView = family.familyOf(id).map((m) => {
+    const bd = agenda.eventsOf(m.id).find((e) => e.kind === 'birthday');
+    let age: number | null = null;
+    let bdDays: number | null = null;
+    let bdOn: string | null = null;
+    if (bd) {
+      bdOn = bd.event_date;
+      const next = nextOccurrence(bd.event_date, true, now);
+      bdDays = daysBetween(now, next);
+      const year = Number(bd.event_date.slice(0, 4));
+      if (year > 1900) {
+        age = Number(next.slice(0, 4)) - year - (bdDays === 0 ? 0 : 1);
+      }
+    }
+    return { ...m, birthday: bdOn, birthdayDays: bdDays, age };
+  });
+
   return c.json({
     ...p,
     circleLabel: CIRCLES[p.circle].label,
-    family: family.familyOf(id),
+    family: familyView,
     pets: pets.ofOwner(id),
     interval: intervalFor(p.circle, p.target_interval),
     tags: people.tagsOf(id),
@@ -115,6 +134,9 @@ api.get('/person/:id', (c) => {
     lastOn: last?.happened_on ?? null,
     silent: last ? daysBetween(last.happened_on, now) : null,
     notes: timeline.notesOf(id, 8),
+    interactions: timeline.interactionsOf(id, 40).map((i) => ({
+      id: i.id, on: i.happened_on, channel: i.channel, summary: i.summary,
+    })),
     events,
     tasks: agenda.tasksOf(id),
   });
@@ -125,6 +147,9 @@ api.post('/person', async (c) => {
     name?: string; circle?: number; tags?: string[]; city?: string;
     telegram?: string; phone?: string; context?: string;
     birthday?: string; lastContact?: string;
+    // расширенная форма-визард: досье и оценка сразу при добавлении
+    occupation?: string; hooks?: string; dreams?: string; familyNote?: string;
+    rapport?: number;
   }>();
 
   const name = (b.name ?? '').trim();
@@ -140,6 +165,15 @@ api.post('/person', async (c) => {
     met_context: b.context?.trim() || null,
     tags: (b.tags ?? []).map((t) => t.trim()).filter(Boolean),
   });
+
+  const dossier: Record<string, string> = {};
+  if (b.occupation?.trim()) dossier['occupation'] = b.occupation.trim();
+  if (b.hooks?.trim()) dossier['hooks'] = b.hooks.trim();
+  if (b.dreams?.trim()) dossier['dreams'] = b.dreams.trim();
+  if (b.familyNote?.trim()) dossier['family'] = b.familyNote.trim();
+  if (Object.keys(dossier).length) people.setDossier(id, dossier);
+
+  if (b.rapport && b.rapport >= 1 && b.rapport <= 5) people.update(id, { rapport: b.rapport });
 
   const bd = b.birthday ? parseBirthday(b.birthday) : null;
   if (bd) agenda.addEvent(id, 'birthday', bd, { recurring: true });

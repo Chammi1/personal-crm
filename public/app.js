@@ -92,13 +92,24 @@ const App = {
     const opened = ref(null);
     const tags = ref([]);
 
-    // ---- форма добавления; круг и теги липкие между сохранениями
-    const form = ref({
-      name: '', circle: 3, tags: [], lastContact: iso(0),
-      birthday: '', city: '', context: '', newTag: '', more: false,
+    // ---- форма добавления: визард из 3 шагов; круг и теги липкие между сохранениями
+    const blankForm = (keep = {}) => ({
+      step: 1,
+      name: '', circle: keep.circle ?? 3, tags: keep.tags ?? [], newTag: '',
+      city: '', birthday: '', telegram: '', phone: '', occupation: '',
+      lastContact: iso(0),
+      context: '', familyNote: '', hooks: '', dreams: '', rapport: 0,
     });
+    const form = ref(blankForm());
     const saving = ref(false);
     const nameInput = ref(null);
+
+    const STEP_TITLES = ['Кто это?', 'Контакты и жизнь', 'Досье'];
+    function wNext() {
+      if (form.value.step === 1 && !form.value.name.trim()) return;
+      form.value.step = Math.min(3, form.value.step + 1);
+    }
+    function wBack() { form.value.step = Math.max(1, form.value.step - 1); }
 
     const WHEN = [
       { label: 'Сегодня',      value: () => iso(0) },
@@ -245,9 +256,98 @@ const App = {
     });
 
     // ---- карточка
+    const cardTab = ref('dossier');   // dossier | history | dates
     async function open(id) {
       opened.value = await call('/person/' + id);
+      cardTab.value = 'dossier';
     }
+
+    const MONTHS_SHORT = ['янв','фев','мар','апр','мая','июн','июл','авг','сен','окт','ноя','дек'];
+    const calDay = (isoDate) => +isoDate.split('-')[2];
+    const calMon = (isoDate) => MONTHS_SHORT[+isoDate.split('-')[1] - 1];
+    const CHANNEL_VIEW = {
+      message: { icon: '💬', word: 'Переписка' },
+      call:    { icon: '📞', word: 'Звонок' },
+      meeting: { icon: '🤝', word: 'Встреча' },
+    };
+
+    /** «Перед разговором»: ближайшее событие + свежая заметка + незакрытые обещания. */
+    const focusText = computed(() => {
+      const p = opened.value;
+      if (!p) return '';
+      const bits = [];
+      const ev = [...p.events].sort((a, b) => a.days - b.days)[0];
+      if (ev && ev.days <= 30) {
+        bits.push(`${ev.title} — ${humanDays(ev.days)}.`);
+      }
+      const note = p.notes?.[0];
+      if (note) {
+        const txt = note.body.length > 100 ? note.body.slice(0, 100) + '…' : note.body;
+        bits.push(`Из заметок: «${txt}»`);
+      }
+      for (const t of (p.tasks ?? []).slice(0, 2)) {
+        bits.push(t.direction === 'i_owe' ? `Ты обещал: ${t.body}.` : `Тебе обещали: ${t.body}.`);
+      }
+      return bits.join(' ');
+    });
+
+    /** Строки досье для вкладки: только заполненные блоки. */
+    const dossierRows = computed(() => {
+      const p = opened.value;
+      if (!p) return [];
+      const d = p.dossier ?? {};
+      const rows = [];
+      if (d.occupation) rows.push({ ic: '💼', b: d.occupation, s: 'работа' });
+      if (d.dreams) rows.push({ ic: '⭐', b: d.dreams, s: 'мечты и цели' });
+      if (d.hooks) rows.push({ ic: '🎣', b: d.hooks, s: 'зацепка для разговора' });
+      if (d.recreation) rows.push({ ic: '🎾', b: d.recreation, s: 'увлечения' });
+      if (d.family && !(p.family?.length)) rows.push({ ic: '👨‍👩‍👧', b: d.family, s: 'семья' });
+      if (d.gift_ideas) rows.push({ ic: '🎁', b: d.gift_ideas, s: 'идеи подарка' });
+      if (d.avoid) rows.push({ ic: '⛔', b: d.avoid, s: 'не трогать' });
+      if (p.met_context) rows.push({ ic: '👋', b: p.met_context, s: 'как познакомились' });
+      return rows;
+    });
+
+    /** История: касания + явные паузы длиннее 30 дней. */
+    const historyRows = computed(() => {
+      const list = opened.value?.interactions ?? [];
+      const out = [];
+      for (let i = 0; i < list.length; i++) {
+        const cur = list[i];
+        out.push({ kind: 'x', ...cur, view: CHANNEL_VIEW[cur.channel] ?? CHANNEL_VIEW.message });
+        const next = list[i + 1];
+        if (next) {
+          const gap = Math.round((new Date(cur.on) - new Date(next.on)) / 86400000);
+          if (gap > 30) out.push({ kind: 'gap', id: 'g' + cur.id, days: gap });
+        }
+      }
+      return out;
+    });
+    const touchesHalfYear = computed(() => {
+      const list = opened.value?.interactions ?? [];
+      const cutoff = new Date(Date.now() - 180 * 86400000);
+      return list.filter((i) => new Date(i.on) >= cutoff).length;
+    });
+
+    /** Даты: события человека (включая питомцев) + дни рождения родных. */
+    const dateRows = computed(() => {
+      const p = opened.value;
+      if (!p) return [];
+      const rows = p.events.map((e) => ({
+        id: 'e' + e.id, eventId: e.id, title: e.title, days: e.days, next: e.next,
+        sub: e.recurring ? 'ежегодно' : 'разовое',
+      }));
+      for (const m of p.family ?? []) {
+        if (m.birthdayDays !== null && m.birthdayDays !== undefined) {
+          rows.push({
+            id: 'f' + m.id, eventId: null, title: `ДР — ${m.name}`, days: m.birthdayDays,
+            next: iso(m.birthdayDays),
+            sub: m.label + (m.age !== null ? ` · исполнится ${m.age + 1}` : ''),
+          });
+        }
+      }
+      return rows.sort((a, b) => a.days - b.days);
+    });
     async function act(path, body) {
       await call(path, { method: 'POST', body: JSON.stringify(body ?? {}) });
       const id = opened.value.id;
@@ -332,6 +432,14 @@ const App = {
       await open(editing.value.id);
       await load();
       flash('Теперь полноценная карточка');
+    }
+
+    /** «В круг» прямо из карточки, без захода в правку. */
+    async function activateFromCard(id) {
+      await call('/person/' + id + '/activate', { method: 'POST', body: JSON.stringify({ circle: 3 }) });
+      await open(opened.value.id);
+      await load();
+      flash('Теперь в круге — появится на карте');
     }
 
     // ---- питомцы
@@ -455,32 +563,36 @@ const App = {
       form.value.newTag = '';
     }
 
-    async function save(again) {
-      if (!form.value.name.trim() || saving.value) return;
+    async function save() {
+      const f = form.value;
+      if (!f.name.trim() || saving.value) return;
       saving.value = true;
       try {
         await call('/person', {
           method: 'POST',
           body: JSON.stringify({
-            name: form.value.name.trim(),
-            circle: form.value.circle,
-            tags: form.value.tags,
-            lastContact: form.value.lastContact || null,
-            birthday: form.value.birthday || null,
-            city: form.value.city || null,
-            context: form.value.context || null,
+            name: f.name.trim(),
+            circle: f.circle,
+            tags: f.tags,
+            lastContact: f.lastContact || null,
+            birthday: f.birthday || null,
+            city: f.city || null,
+            telegram: f.telegram || null,
+            phone: f.phone || null,
+            occupation: f.occupation || null,
+            context: f.context || null,
+            familyNote: f.familyNote || null,
+            hooks: f.hooks || null,
+            dreams: f.dreams || null,
+            rapport: f.rapport || null,
           }),
         });
-        const kept = { circle: form.value.circle, tags: [...form.value.tags] };
-        form.value = {
-          name: '', circle: kept.circle, tags: kept.tags, lastContact: iso(0),
-          birthday: '', city: '', context: '', newTag: '', more: false,
-        };
+        form.value = blankForm({ circle: f.circle, tags: [...f.tags] });
         await load();
         const st = state.value.intake;
         flash(`Добавлен. Сегодня ${st.addedToday} из ${st.quota}`);
-        if (again) { await nextTick(); nameInput.value?.focus(); }
-        else tab.value = 'roster';
+        await nextTick();
+        nameInput.value?.focus();
       } catch (e) {
         flash('Не сохранилось: ' + e.message);
       } finally {
@@ -498,6 +610,9 @@ const App = {
     return {
       tab, state, loading, mode, toast, opened, tags, form, saving, nameInput,
       WHEN, iso, humanDate, humanDays, plural, KIND, HEALTH,
+      STEP_TITLES, wNext, wBack,
+      cardTab, focusText, dossierRows, historyRows, touchesHalfYear, dateRows,
+      calDay, calMon, activateFromCard,
       sectorLabel, sectorEdge, lit, ghosts, nodeRadius, nodeColor, showLabel, labelPos, shortWhy,
       headline, subline, circleLoad, open, act, toggleTag, addNewTag, save, anotherPrompt, load, flash,
       dir, dirQ, dirCity, dirTag, dirCircle, dirMore, dirCities, dirTags,
@@ -581,77 +696,132 @@ const App = {
     </div>
   </template>
 
-  <!-- ================= ДОБАВИТЬ ================= -->
+  <!-- ================= ДОБАВИТЬ: ВИЗАРД ================= -->
   <template v-if="tab === 'add'">
     <header class="head">
       <div class="eyebrow">
-        <span>новый человек</span>
+        <span>новый человек · шаг {{ form.step }} из 3</span>
         <span>{{ state.intake.addedToday }} / {{ state.intake.quota }} сегодня</span>
       </div>
-      <h1>Кто это?</h1>
+      <div class="steps">
+        <span v-for="s in 3" :key="s" :class="{ done: form.step >= s }"></span>
+      </div>
+      <h1>{{ STEP_TITLES[form.step - 1] }}</h1>
+      <p class="sub" v-if="form.step === 1">Имя и место в твоём круге. Единственный обязательный шаг.</p>
+      <p class="sub" v-else-if="form.step === 2">{{ form.name }} · круг {{ form.circle }}<template v-if="form.tags.length"> · #{{ form.tags[0] }}</template></p>
+      <p class="sub" v-else>Самое ценное — то, что забудется через месяц. Всё опционально.</p>
     </header>
 
-    <form @submit.prevent="save(true)">
-      <label>Имя</label>
-      <input type="text" ref="nameInput" v-model="form.name" placeholder="Аня Соколова"
-             autocomplete="off" autocapitalize="words">
+    <form @submit.prevent="form.step < 3 ? wNext() : save()">
+      <!-- шаг 1: кто -->
+      <template v-if="form.step === 1">
+        <label>Имя</label>
+        <input type="text" ref="nameInput" v-model="form.name" placeholder="Аня Соколова"
+               autocomplete="off" autocapitalize="words">
 
-      <label>Круг близости</label>
-      <div class="rings-pick">
-        <button type="button" v-for="c in circleLoad" :key="c.circle"
-                :class="{ on: form.circle === c.circle }" @click="form.circle = c.circle">
-          <span class="bead"></span>
-          <span>{{ c.label }}</span>
-          <span class="cap" :class="{ over: c.n >= c.cap }">{{ c.n }} / {{ c.cap }}</span>
-        </button>
-      </div>
+        <label>Круг близости</label>
+        <div class="rings-pick">
+          <button type="button" v-for="c in circleLoad" :key="c.circle"
+                  :class="{ on: form.circle === c.circle }" @click="form.circle = c.circle">
+            <span class="bead"></span>
+            <span>{{ c.label }}</span>
+            <span class="cap" :class="{ over: c.n >= c.cap }">{{ c.n }} / {{ c.cap }}</span>
+          </button>
+        </div>
 
-      <label>Откуда знаешь</label>
-      <div class="chips">
-        <button type="button" class="chip" v-for="t in tags" :key="t.tag"
-                :class="{ on: form.tags.includes(t.tag) }" @click="toggleTag(t.tag)">
-          {{ t.tag }}<small>{{ t.n }}</small>
-        </button>
-      </div>
-      <div class="row" style="margin-top:8px">
-        <input type="text" v-model="form.newTag" placeholder="новый тег"
-               @keydown.enter.prevent="addNewTag" autocapitalize="none">
-        <button type="button" class="btn ghost" style="flex:0 0 96px" @click="addNewTag">Добавить</button>
-      </div>
+        <label>Откуда знаешь</label>
+        <div class="chips">
+          <button type="button" class="chip" v-for="t in tags" :key="t.tag"
+                  :class="{ on: form.tags.includes(t.tag) }" @click="toggleTag(t.tag)">
+            {{ t.tag }}<small>{{ t.n }}</small>
+          </button>
+        </div>
+        <div class="row" style="margin-top:8px">
+          <input type="text" v-model="form.newTag" placeholder="новый тег"
+                 @keydown.enter.prevent="addNewTag" autocapitalize="none">
+          <button type="button" class="btn ghost" style="flex:0 0 96px" @click="addNewTag">Добавить</button>
+        </div>
 
-      <label>Когда общались последний раз</label>
-      <div class="chips">
-        <button type="button" class="chip" v-for="w in WHEN" :key="w.label"
-                :class="{ on: form.lastContact === w.value() }" @click="form.lastContact = w.value()">
-          {{ w.label }}
-        </button>
-        <button type="button" class="chip" :class="{ on: !form.lastContact }" @click="form.lastContact = ''">
-          Не помню
-        </button>
-      </div>
-      <p class="hint" :class="{ warn: !form.lastContact }" v-if="!form.lastContact">
-        Без даты человек сохранится, но не будет попадать в напоминания. Лучше поставить хотя бы примерно.
-      </p>
-
-      <button type="button" class="btn ghost" style="margin-top:20px"
-              @click="form.more = !form.more">{{ form.more ? 'Свернуть' : 'Ещё поля' }}</button>
-
-      <template v-if="form.more">
-        <label>День рождения</label>
-        <input type="text" v-model="form.birthday" placeholder="12.04 или 12.04.1991" inputmode="numeric">
-        <label>Город</label>
-        <input type="text" v-model="form.city" placeholder="Москва">
-        <label>Как познакомились</label>
-        <textarea v-model="form.context" rows="2" placeholder="забег в Сокольниках, познакомил Тимур"></textarea>
+        <div class="wnav">
+          <button type="submit" class="btn" :disabled="!form.name.trim()">Дальше</button>
+        </div>
+        <p class="hint">Круг и теги запомнятся — следующий человек из этой же компании добавится за секунды.</p>
       </template>
 
-      <div class="btns">
-        <button type="submit" class="btn" :disabled="!form.name.trim() || saving">Сохранить и добавить ещё</button>
-        <button type="button" class="btn ghost" :disabled="!form.name.trim() || saving" @click="save(false)">
-          Сохранить и закончить
-        </button>
-      </div>
-      <p class="hint">Круг и теги остаются между сохранениями — так одна пачка людей из одного контекста вводится за минуту.</p>
+      <!-- шаг 2: контакты и жизнь -->
+      <template v-else-if="form.step === 2">
+        <div class="row">
+          <div>
+            <label>Город</label>
+            <input type="text" v-model="form.city" placeholder="Москва">
+          </div>
+          <div>
+            <label>День рождения</label>
+            <input type="text" v-model="form.birthday" placeholder="12.04.1991" inputmode="numeric">
+          </div>
+        </div>
+        <div class="row">
+          <div>
+            <label>Telegram</label>
+            <input type="text" v-model="form.telegram" placeholder="@ник" autocapitalize="none">
+          </div>
+          <div>
+            <label>Телефон</label>
+            <input type="text" v-model="form.phone" placeholder="+7 …" inputmode="tel">
+          </div>
+        </div>
+
+        <label>Род деятельности</label>
+        <input type="text" v-model="form.occupation" placeholder="юрист в IT, тренер по бегу…">
+
+        <label>Когда общались последний раз</label>
+        <div class="chips">
+          <button type="button" class="chip" v-for="w in WHEN" :key="w.label"
+                  :class="{ on: form.lastContact === w.value() }" @click="form.lastContact = w.value()">
+            {{ w.label }}
+          </button>
+          <button type="button" class="chip" :class="{ on: !form.lastContact }" @click="form.lastContact = ''">
+            Не помню
+          </button>
+        </div>
+        <p class="hint" :class="{ warn: !form.lastContact }" v-if="!form.lastContact">
+          Без даты человек сохранится, но не попадёт в напоминания — поставь хотя бы примерно.
+        </p>
+
+        <div class="wnav">
+          <button type="button" class="btn ghost back" @click="wBack">Назад</button>
+          <button type="submit" class="btn">Дальше</button>
+        </div>
+      </template>
+
+      <!-- шаг 3: досье -->
+      <template v-else>
+        <label>Как познакомились</label>
+        <textarea v-model="form.context" rows="2" placeholder="забег в Сокольниках, познакомил Тимур"></textarea>
+
+        <label>Семья — кто у него есть</label>
+        <textarea v-model="form.familyNote" rows="2" placeholder="муж Паша, дочь Мира 5 лет, кот Барсик"></textarea>
+        <p class="hint">Пока одной строкой. Связать карточки родных со всеми датами можно будет в правке.</p>
+
+        <label>Зацепки — о чём поговорить</label>
+        <textarea v-model="form.hooks" rows="2" placeholder="готовится к первому марафону в сентябре"></textarea>
+
+        <label>Мечты и цели</label>
+        <textarea v-model="form.dreams" rows="2" placeholder="хочет свою юрпрактику к 30"></textarea>
+
+        <label>Как вам вместе</label>
+        <div class="rate big">
+          <button type="button" v-for="n in 5" :key="n" :class="{ on: n <= form.rapport }"
+                  @click="form.rapport = form.rapport === n ? 0 : n"></button>
+          <span class="hint" style="margin:0 0 0 10px">{{ ['не оценено','тяжело','прохладно','нормально','хорошо','отлично'][form.rapport] }}</span>
+        </div>
+
+        <div class="wnav">
+          <button type="button" class="btn ghost back" @click="wBack">Назад</button>
+          <button type="submit" class="btn" :disabled="!form.name.trim() || saving">Сохранить</button>
+        </div>
+        <p class="hint">Один заполненный пункт досье стоит десяти дежурных «как дела».</p>
+      </template>
     </form>
   </template>
 
@@ -754,7 +924,7 @@ const App = {
     </div>
   </template>
 
-  <!-- ================= КАРТОЧКА ================= -->
+  <!-- ================= КАРТОЧКА: ВКЛАДКИ ================= -->
   <Transition name="fade">
     <div v-if="opened" class="scrim" @click="opened = null"></div>
   </Transition>
@@ -769,8 +939,7 @@ const App = {
         <div>
           <h2>{{ opened.name }}</h2>
           <div class="meta">
-            круг {{ opened.circle }} · {{ opened.circleLabel }}
-            <template v-if="opened.city"> · {{ opened.city }}</template>
+            {{ opened.circleLabel }}<template v-if="opened.city"> · {{ opened.city }}</template><template v-if="opened.dossier && opened.dossier.occupation"> · {{ opened.dossier.occupation }}</template>
           </div>
           <div class="rate" v-if="opened.rapport">
             <i v-for="n in 5" :key="n" :class="{ on: n <= opened.rapport }"></i>
@@ -778,70 +947,117 @@ const App = {
         </div>
       </div>
 
-      <div class="why-row" v-if="opened.lastOn">
-        <i :style="{ background: opened.silent > opened.interval ? 'var(--late)' : 'var(--fresh)' }"></i>
-        <span>Последний контакт {{ humanDate(opened.lastOn) }} — {{ opened.silent }} дн назад при норме {{ opened.interval }}.</span>
-      </div>
-      <div class="why-row" v-else>
-        <i style="background:var(--ink-faint)"></i>
-        <span>Дата общения не указана — человек не попадает в напоминания.</span>
+      <div class="focus" v-if="focusText">
+        <div class="fl">Перед разговором</div>
+        {{ focusText }}
       </div>
 
-      <div class="recall" v-if="opened.dossier && (opened.dossier.family || opened.dossier.occupation || opened.dossier.recreation || opened.dossier.dreams)">
-        <div v-if="opened.dossier.family"><b>Семья:</b> {{ opened.dossier.family }}</div>
-        <div v-if="opened.dossier.occupation"><b>Работа:</b> {{ opened.dossier.occupation }}</div>
-        <div v-if="opened.dossier.recreation"><b>Увлечения:</b> {{ opened.dossier.recreation }}</div>
-        <div v-if="opened.dossier.dreams"><b>Планы:</b> {{ opened.dossier.dreams }}</div>
+      <div class="tabsx">
+        <button :class="{ on: cardTab === 'dossier' }" @click="cardTab = 'dossier'">Досье</button>
+        <button :class="{ on: cardTab === 'history' }" @click="cardTab = 'history'">История</button>
+        <button :class="{ on: cardTab === 'dates' }" @click="cardTab = 'dates'">Даты</button>
       </div>
-      <div class="recall" v-else>Досье пустое. Заполни блоки в боте: <b>/f семья ...</b></div>
 
-      <template v-if="opened.family && opened.family.length">
-        <div class="meta" style="margin-top:16px">семья</div>
-        <div class="kin">
-          <div class="kin-card" v-for="m in opened.family" :key="m.id">
-            <span class="ava sm">
+      <!-- ===== вкладка ДОСЬЕ ===== -->
+      <template v-if="cardTab === 'dossier'">
+        <div v-if="dossierRows.length">
+          <div class="frow" v-for="(r, i) in dossierRows" :key="i">
+            <div class="ic">{{ r.ic }}</div>
+            <div><b>{{ r.b }}</b><span>{{ r.s }}</span></div>
+          </div>
+        </div>
+        <div class="recall" v-else style="margin-top:14px">
+          Досье пустое. Нажми «Редактировать» и запиши хотя бы одну зацепку — она всплывёт в нужный момент.
+        </div>
+
+        <template v-if="opened.family && opened.family.length">
+          <div class="meta" style="margin-top:16px">семья</div>
+          <div class="krow" v-for="m in opened.family" :key="m.id">
+            <span class="kava">
               <img v-if="m.avatar" :src="'/avatars/' + m.avatar" alt="">
-              <span v-else>{{ m.name.slice(0, 1) }}</span>
+              <template v-else>{{ m.name.slice(0, 1) }}</template>
             </span>
-            <b>{{ m.name }}</b>
-            <em>{{ m.label }}<template v-if="m.derived"> ·&nbsp;авто</template></em>
+            <div>
+              <b>{{ m.name }}</b>
+              <span>{{ m.label }}<template v-if="m.age !== null"> · {{ m.age }} {{ plural(m.age, 'год', 'года', 'лет') }}</template><template v-if="m.derived"> · авто</template></span>
+            </div>
+            <div class="kbd" v-if="m.birthday">
+              др <b>{{ calDay(m.birthday) }} {{ calMon(m.birthday) }}</b>
+            </div>
+            <button class="mini" v-if="m.isStub" @click="activateFromCard(m.id)">в круг</button>
           </div>
-        </div>
-      </template>
+        </template>
 
-      <template v-if="opened.pets && opened.pets.length">
-        <div class="meta" style="margin-top:16px">питомцы</div>
-        <div class="kin">
-          <div class="kin-card" v-for="p in opened.pets" :key="p.id">
-            <button class="ava sm" @click="uploadAvatar('pet', p.id)">
+        <template v-if="opened.pets && opened.pets.length">
+          <div class="meta" style="margin-top:16px">питомцы</div>
+          <div class="krow" v-for="p in opened.pets" :key="'pet' + p.id">
+            <button class="kava pet" @click="uploadAvatar('pet', p.id)">
               <img v-if="p.avatar" :src="'/avatars/' + p.avatar" alt="">
-              <span v-else>{{ p.name.slice(0, 1) }}</span>
+              <template v-else>🐾</template>
             </button>
-            <b>{{ p.name }}</b>
-            <em>{{ [p.species, p.breed].filter(Boolean).join(', ') || 'питомец' }}</em>
+            <div>
+              <b>{{ p.name }}</b>
+              <span>{{ [p.species, p.breed].filter(Boolean).join(' · ') || 'питомец' }}<template v-if="p.note"> · {{ p.note }}</template></span>
+            </div>
+            <div class="kbd" v-if="p.birthday">
+              др <b>{{ calDay(p.birthday) }} {{ calMon(p.birthday) }}</b>
+            </div>
           </div>
-        </div>
+        </template>
+
+        <template v-if="opened.tasks.length">
+          <div class="meta" style="margin-top:16px">обязательства</div>
+          <div class="list">
+            <button v-for="t in opened.tasks" :key="t.id" @click="act('/task/' + t.id + '/close', { keepOpen: true })">
+              <span class="bead" style="background:var(--owed)"></span>
+              <span>{{ t.direction === 'i_owe' ? 'Ты: ' : 'Он: ' }}{{ t.body }}</span>
+              <span class="tail">закрыть</span>
+            </button>
+          </div>
+        </template>
       </template>
 
-      <template v-if="opened.events.length">
-        <div class="meta" style="margin-top:16px">даты</div>
-        <div class="list">
-          <div v-for="e in opened.events" :key="e.id" style="padding:9px 2px;border-bottom:1px solid var(--line);font-size:14px;display:flex">
-            <span>{{ e.title }}</span>
-            <span class="tail">{{ humanDays(e.days) }}</span>
-          </div>
+      <!-- ===== вкладка ИСТОРИЯ ===== -->
+      <template v-else-if="cardTab === 'history'">
+        <div class="focus calm" style="margin-top:14px" v-if="opened.lastOn">
+          <div class="fl">Ритм связи</div>
+          {{ opened.silent }} дн тишины при норме {{ opened.interval }}.
+          За полгода — {{ touchesHalfYear }} {{ plural(touchesHalfYear, 'касание', 'касания', 'касаний') }}.
         </div>
+        <div class="focus calm" style="margin-top:14px" v-else>
+          <div class="fl">Ритм связи</div>
+          Ни одного контакта не записано — человек не участвует в напоминаниях.
+        </div>
+
+        <template v-for="r in historyRows" :key="r.id">
+          <div class="gap-row" v-if="r.kind === 'gap'">пауза {{ r.days }} {{ plural(r.days, 'день', 'дня', 'дней') }}</div>
+          <div class="lrow" v-else>
+            <div class="ic">{{ r.view.icon }}</div>
+            <div>
+              <b>{{ r.view.word }}</b>
+              <div class="note" v-if="r.summary">{{ r.summary }}</div>
+            </div>
+            <div class="dt">{{ humanDate(r.on) }}</div>
+          </div>
+        </template>
+        <p class="hint" v-if="!historyRows.length" style="margin-top:14px">
+          Лента пуста. Отметь контакт кнопкой внизу — и после каждого будет вопрос «о чём говорили», из этого соберётся история.
+        </p>
       </template>
 
-      <template v-if="opened.tasks.length">
-        <div class="meta" style="margin-top:16px">обязательства</div>
-        <div class="list">
-          <button v-for="t in opened.tasks" :key="t.id" @click="act('/task/' + t.id + '/close')">
-            <span class="bead" style="background:var(--owed)"></span>
-            <span>{{ t.direction === 'i_owe' ? 'Ты: ' : 'Он: ' }}{{ t.body }}</span>
-            <span class="tail">закрыть</span>
-          </button>
+      <!-- ===== вкладка ДАТЫ ===== -->
+      <template v-else>
+        <div class="drow2" v-for="d in dateRows" :key="d.id">
+          <div class="cal"><b>{{ calDay(d.next) }}</b><span>{{ calMon(d.next) }}</span></div>
+          <div class="what">
+            <b>{{ d.title }}</b>
+            <span>{{ d.sub }}</span>
+          </div>
+          <div class="in" :class="{ soon: d.days <= 14 }">{{ humanDays(d.days) }}</div>
         </div>
+        <p class="hint" v-if="!dateRows.length" style="margin-top:14px">
+          Дат пока нет. День рождения, защита, переезд — добавляются в правке, в блоке «Контакты и даты».
+        </p>
       </template>
 
       <div class="acts">
