@@ -139,9 +139,12 @@ input::placeholder,textarea::placeholder{color:var(--ink-faint);}
 .list .tail{margin-left:auto;font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--ink-faint);}
 .list .bead{width:7px;height:7px;border-radius:50%;flex-shrink:0;}
 
-.scrim{position:absolute;inset:0;background:rgba(8,7,15,.65);z-index:5;}
+/* fixed, а не absolute: иначе на длинной странице (справочник в «Разметке»)
+   шторка уезжала в самый низ документа, за пределы экрана. */
+.scrim{position:fixed;inset:0;background:rgba(8,7,15,.65);z-index:5;}
 .sheet{
-  position:absolute;left:0;right:0;bottom:0;background:var(--sheet);border-top:1px solid var(--line);
+  position:fixed;left:0;right:0;bottom:0;max-width:480px;margin:0 auto;
+  background:var(--sheet);border-top:1px solid var(--line);
   border-radius:22px 22px 0 0;padding:16px 18px calc(24px + env(safe-area-inset-bottom));
   z-index:6;max-height:88%;overflow-y:auto;
 }
