@@ -1,9 +1,14 @@
 services:
   crm:
     build: .
+    container_name: personal-crm
     restart: unless-stopped
     env_file: .env
-    ports:
-      - "127.0.0.1:3000:3000"
     volumes:
       - ./data:/app/data
+    networks:
+      - proxy
+
+networks:
+  proxy:
+    external: true
