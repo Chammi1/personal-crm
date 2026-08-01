@@ -1,4 +1,4 @@
-import { createApp, ref, computed, onMounted, nextTick } from '/vendor/vue.js';
+import { createApp, ref, computed, onMounted, nextTick, watch } from '/vendor/vue.js';
 
 const tg = window.Telegram?.WebApp;
 tg?.ready();
@@ -113,12 +113,62 @@ const App = {
       try {
         state.value = await call('/state');
         tags.value = await call('/tags');
+        // Справочник обновляем только если он уже открывался: иначе не тратим запрос.
+        if (dir.value) dir.value = await call('/people');
       } catch (e) {
         toast.value = 'Нет доступа: ' + e.message;
       } finally {
         loading.value = false;
       }
     }
+
+    // ---- справочник всех людей на вкладке «Разметка»
+    const dir = ref(null);           // null = ещё не загружался
+    const dirQ = ref('');            // строка поиска
+    const dirCity = ref('');         // выбранный город
+    const dirTag = ref('');          // выбранный тег (род деятельности)
+    const dirCircle = ref(null);     // выбранный круг
+    const dirMore = ref(false);      // показать все чипсы, а не первые 10
+
+    async function loadDir() {
+      dir.value = await call('/people');
+    }
+    watch(tab, (t) => { if (t === 'roster' && dir.value === null) loadDir(); });
+
+    const dirCities = computed(() => {
+      const m = new Map();
+      for (const p of dir.value ?? []) if (p.city) m.set(p.city, (m.get(p.city) ?? 0) + 1);
+      return [...m.entries()].sort((a, b) => b[1] - a[1]).map(([city, n]) => ({ city, n }));
+    });
+    const dirTags = computed(() => {
+      const m = new Map();
+      for (const p of dir.value ?? []) for (const t of p.tags) m.set(t, (m.get(t) ?? 0) + 1);
+      return [...m.entries()].sort((a, b) => b[1] - a[1]).map(([tag, n]) => ({ tag, n }));
+    });
+
+    const dirFiltered = computed(() => {
+      if (!dir.value) return [];
+      const q = dirQ.value.trim().toLowerCase();
+      return dir.value.filter((p) => {
+        if (dirCity.value && (p.city ?? '') !== dirCity.value) return false;
+        if (dirTag.value && !p.tags.includes(dirTag.value)) return false;
+        if (dirCircle.value !== null && p.circle !== dirCircle.value) return false;
+        if (!q) return true;
+        // Поиск сразу по всему, что видно в строке: имя, город, работа, теги.
+        return [p.name, p.city, p.occupation, ...p.tags]
+          .filter(Boolean).some((s) => s.toLowerCase().includes(q));
+      });
+    });
+
+    const dirSub = (p) => [
+      p.city, p.occupation, p.tags.join(', '),
+    ].filter(Boolean).join(' · ');
+
+    function dirReset() {
+      dirQ.value = ''; dirCity.value = ''; dirTag.value = ''; dirCircle.value = null;
+    }
+    const dirHasFilter = computed(() =>
+      dirQ.value || dirCity.value || dirTag.value || dirCircle.value !== null);
 
     function flash(text) {
       toast.value = text;
@@ -450,6 +500,8 @@ const App = {
       WHEN, iso, humanDate, humanDays, plural, KIND, HEALTH,
       sectorLabel, sectorEdge, lit, ghosts, nodeRadius, nodeColor, showLabel, labelPos, shortWhy,
       headline, subline, circleLoad, open, act, toggleTag, addNewTag, save, anotherPrompt, load, flash,
+      dir, dirQ, dirCity, dirTag, dirCircle, dirMore, dirCities, dirTags,
+      dirFiltered, dirSub, dirReset, dirHasFilter, loadDir,
       editing, confirmStep, newEvent, archivedList, DOSSIER_BLOCKS, ROLES,
       block, toggleBlock, newMember, newPet,
       uploadAvatar, addMember, delMember, activateMember, addPet, delPet,
@@ -634,6 +686,48 @@ const App = {
             <span class="tail">круг {{ n.circle }}</span>
           </button>
         </div>
+      </template>
+
+      <label>Все люди<template v-if="dir"> · {{ dirHasFilter ? dirFiltered.length + ' из ' + dir.length : dir.length }}</template></label>
+      <template v-if="dir === null">
+        <p class="hint">Загружаю список…</p>
+      </template>
+      <template v-else>
+        <input type="text" v-model="dirQ" placeholder="имя, город, работа, тег" autocapitalize="none">
+
+        <div class="chips" style="margin-top:10px" v-if="dirCities.length > 1 || dirTags.length">
+          <button type="button" class="chip" v-for="c in (dirMore ? dirCities : dirCities.slice(0, 5))" :key="'c' + c.city"
+                  :class="{ on: dirCity === c.city }" @click="dirCity = dirCity === c.city ? '' : c.city">
+            {{ c.city }}<small>{{ c.n }}</small>
+          </button>
+          <button type="button" class="chip" v-for="t in (dirMore ? dirTags : dirTags.slice(0, 5))" :key="'t' + t.tag"
+                  :class="{ on: dirTag === t.tag }" @click="dirTag = dirTag === t.tag ? '' : t.tag">
+            #{{ t.tag }}<small>{{ t.n }}</small>
+          </button>
+          <button type="button" class="chip" v-for="c in circleLoad" :key="'k' + c.circle"
+                  :class="{ on: dirCircle === c.circle }" @click="dirCircle = dirCircle === c.circle ? null : c.circle"
+                  v-show="dirMore">
+            круг {{ c.circle }}<small>{{ c.n }}</small>
+          </button>
+          <button type="button" class="chip" v-if="dirCities.length + dirTags.length > 10 || !dirMore"
+                  @click="dirMore = !dirMore">{{ dirMore ? 'свернуть' : 'ещё фильтры…' }}</button>
+        </div>
+
+        <p class="hint" v-if="dirHasFilter" style="margin-top:8px">
+          Найдено {{ dirFiltered.length }}. <a href="#" @click.prevent="dirReset" style="color:var(--event)">Сбросить фильтры</a>
+        </p>
+
+        <div class="list">
+          <button v-for="p in dirFiltered" :key="p.id" @click="open(p.id)">
+            <span class="ava sm">
+              <img v-if="p.avatar" :src="'/avatars/' + p.avatar" alt="">
+              <span v-else>{{ p.name.slice(0, 1) }}</span>
+            </span>
+            <span class="kin-name">{{ p.name }}<em>{{ dirSub(p) || 'круг ' + p.circle }}</em></span>
+            <span class="tail">{{ p.silent !== null ? p.silent + ' дн' : 'нет даты' }}</span>
+          </button>
+        </div>
+        <p class="hint" v-if="!dirFiltered.length">Никого не нашлось. Попробуй убрать фильтры.</p>
       </template>
 
       <label>Архив</label>

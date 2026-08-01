@@ -62,6 +62,32 @@ api.get('/state', (c) => {
   });
 });
 
+/**
+ * Полный справочник для вкладки «Разметка»: все активные люди с полями,
+ * по которым удобно фильтровать — город, теги, род деятельности из досье.
+ * Фильтрация происходит на клиенте: базы до тысячи человек это позволяет.
+ */
+api.get('/people', (c) => {
+  const now = today();
+  const lastContact = timeline.lastContactMap();
+  const list = people.active().map((p) => {
+    const lastOn = lastContact.get(p.id) ?? null;
+    return {
+      id: p.id,
+      name: p.name,
+      circle: p.circle,
+      city: p.city,
+      avatar: p.avatar,
+      tags: people.tagsOf(p.id),
+      occupation: people.dossierOf(p.id)?.occupation ?? null,
+      lastOn,
+      silent: lastOn ? daysBetween(lastOn, now) : null,
+      health: lastOn ? signals.healthLabel(signals.ratio(p, lastOn, now)) : null,
+    };
+  });
+  return c.json(list);
+});
+
 api.get('/person/:id', (c) => {
   const id = Number(c.req.param('id'));
   const p = people.byId(id);
