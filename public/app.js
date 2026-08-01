@@ -99,6 +99,7 @@ const App = {
       city: '', birthday: '', telegram: '', phone: '', occupation: '',
       lastContact: iso(0),
       context: '', familyNote: '', hooks: '', dreams: '', rapport: 0,
+      viaQuery: '', metVia: null, metViaName: '',
     });
     const form = ref(blankForm());
     const saving = ref(false);
@@ -186,6 +187,48 @@ const App = {
       });
       flash('Записал: переписка с ' + p.name.split(' ')[0]);
       await load();
+    }
+
+    // ---- вкладка «Сеть»: аналитика + коллективные события
+    const net = ref(null);
+    const cevents = ref(null);
+    const newCe = ref({ date: '', title: '', tag: '' });
+
+    async function loadNet() {
+      [net.value, cevents.value] = await Promise.all([call('/network'), call('/cevents')]);
+    }
+    watch(tab, (t) => { if (t === 'net') loadNet(); });
+
+    async function addCe() {
+      const ce = newCe.value;
+      if (!ce.date.trim() || !ce.title.trim()) return;
+      try {
+        await call('/cevents', { method: 'POST', body: JSON.stringify(ce) });
+        newCe.value = { date: '', title: '', tag: '' };
+        await loadNet();
+        flash('Событие добавлено — повод получит весь кластер');
+      } catch (e) { flash(e.message); }
+    }
+    async function delCe(id) {
+      await call('/cevent/' + id, { method: 'DELETE' });
+      await loadNet();
+      flash('Событие удалено');
+    }
+    async function closeCe(ce) {
+      await call('/cevent/' + ce.id + '/close', {
+        method: 'POST', body: JSON.stringify({ occurrence: ce.next }),
+      });
+      await loadNet();
+      flash('Закрыто для всего кластера');
+    }
+
+    /** Подсказки «кто познакомил»: поиск по загруженному справочнику. */
+    function viaMatches(query, excludeId) {
+      const q = (query ?? '').trim().toLowerCase();
+      if (!q || !dir.value) return [];
+      return dir.value
+        .filter((p) => p.id !== excludeId && p.name.toLowerCase().includes(q))
+        .slice(0, 4);
     }
     const dirHasFilter = computed(() =>
       dirQ.value || dirCity.value || dirTag.value || dirCircle.value !== null);
@@ -411,6 +454,7 @@ const App = {
         city: p.city ?? '', telegram: p.telegram ?? '', phone: p.phone ?? '',
         context: p.met_context ?? '', interval: p.target_interval ?? '', rapport: p.rapport ?? 0,
         lastContact: '', newTag: '',
+        viaQuery: '', metVia: p.metVia?.id ?? null, metViaName: p.metVia?.name ?? '',
         dossier: Object.fromEntries(DOSSIER_BLOCKS.map(([k]) => [k, d[k] ?? ''])),
       };
       confirmStep.value = null;
@@ -526,6 +570,7 @@ const App = {
             dossier: e.dossier,
             rapport: e.rapport || null,
             lastContact: e.lastContact || undefined,
+            metVia: e.metVia,
           }),
         });
         const id = e.id;
@@ -624,6 +669,7 @@ const App = {
             hooks: f.hooks || null,
             dreams: f.dreams || null,
             rapport: f.rapport || null,
+            metVia: f.metVia,
           }),
         });
         form.value = blankForm({ circle: f.circle, tags: [...f.tags] });
@@ -644,7 +690,7 @@ const App = {
       state.value.intake.prompt = prompt;
     }
 
-    onMounted(load);
+    onMounted(() => { load(); loadDir(); });   // справочник нужен и подсказкам «кто познакомил»
 
     return {
       tab, state, loading, mode, toast, opened, tags, form, saving, nameInput,
@@ -656,6 +702,7 @@ const App = {
       headline, subline, circleLoad, open, act, toggleTag, addNewTag, save, anotherPrompt, load, flash,
       dir, dirQ, dirCity, dirTag, dirCircle, dirMore, dirCities, dirTags,
       dirFiltered, dirSub, dirReset, dirHasFilter, loadDir, quickLog,
+      net, cevents, newCe, loadNet, addCe, delCe, closeCe, viaMatches,
       editing, confirmStep, newEvent, archivedList, DOSSIER_BLOCKS, ROLES,
       block, toggleBlock, newMember, newPet,
       uploadAvatar, addMember, delMember, activateMember, addPet, delPet,
@@ -836,7 +883,25 @@ const App = {
       <!-- шаг 3: досье -->
       <template v-else>
         <label>Как познакомились</label>
-        <textarea v-model="form.context" rows="2" placeholder="забег в Сокольниках, познакомил Тимур"></textarea>
+        <textarea v-model="form.context" rows="2" placeholder="забег в Сокольниках"></textarea>
+
+        <label>Кто познакомил</label>
+        <template v-if="form.metVia">
+          <div class="chips">
+            <button type="button" class="chip on" @click="form.metVia = null; form.metViaName = ''">
+              🔗 {{ form.metViaName }} · убрать
+            </button>
+          </div>
+        </template>
+        <template v-else>
+          <input type="text" v-model="form.viaQuery" placeholder="начни вводить имя из базы" autocapitalize="words">
+          <div class="chips" style="margin-top:8px" v-if="viaMatches(form.viaQuery).length">
+            <button type="button" class="chip" v-for="m in viaMatches(form.viaQuery)" :key="m.id"
+                    @click="form.metVia = m.id; form.metViaName = m.name; form.viaQuery = ''">
+              {{ m.name }}
+            </button>
+          </div>
+        </template>
 
         <label>Семья — кто у него есть</label>
         <textarea v-model="form.familyNote" rows="2" placeholder="муж Паша, дочь Мира 5 лет, кот Барсик"></textarea>
@@ -962,6 +1027,89 @@ const App = {
         </div>
       </div>
     </div>
+  </template>
+
+  <!-- ================= СЕТЬ ================= -->
+  <template v-if="tab === 'net'">
+    <header class="head">
+      <div class="eyebrow"><span>сеть изнутри</span><span>{{ state.counts.total }} человек</span></div>
+      <h1>Сеть</h1>
+      <p class="sub">Кластеры, мосты, коннекторы и общие поводы.</p>
+    </header>
+
+    <div class="panel" v-if="net">
+      <label>Кластеры</label>
+      <div class="list">
+        <div v-for="c in net.clusters.slice(0, 8)" :key="c.tag"
+             style="display:flex;gap:10px;padding:11px 2px;border-bottom:1px solid var(--line);font-size:14px;align-items:baseline">
+          <span>#{{ c.tag }}</span>
+          <span class="tail">{{ c.n }} чел · {{ c.avgSilence !== null ? 'тишина ~' + c.avgSilence + ' дн' : 'не размечено' }}</span>
+        </div>
+      </div>
+
+      <template v-if="net.bridges.length">
+        <label>Мосты между кластерами</label>
+        <div class="list">
+          <button v-for="b in net.bridges" :key="b.id" @click="open(b.id)">
+            <span class="bead" style="background:var(--acc)"></span>
+            <span>{{ b.name }}</span>
+            <span class="tail">{{ b.tags.map(t => '#' + t).join(' ') }}</span>
+          </button>
+        </div>
+        <p class="hint">Потеряешь моста — потеряешь связь с целым куском сети.</p>
+      </template>
+
+      <label>Коннекторы</label>
+      <template v-if="net.connectors.length">
+        <div class="list">
+          <button v-for="c in net.connectors" :key="c.id" @click="open(c.id)">
+            <span class="bead" style="background:var(--fresh)"></span>
+            <span>{{ c.name }}</span>
+            <span class="tail">привёл {{ c.n }}</span>
+          </button>
+        </div>
+      </template>
+      <p class="hint" v-else>Пока пусто. Указывай «кто познакомил» при добавлении — узнаешь, кто расширяет твою сеть.</p>
+
+      <template v-if="net.holes.length">
+        <label>Заброшенные кластеры</label>
+        <div class="list">
+          <div v-for="h in net.holes" :key="h.tag"
+               style="display:flex;gap:10px;padding:11px 2px;border-bottom:1px solid var(--line);font-size:14px">
+            <span style="color:var(--late)">#{{ h.tag }}</span>
+            <span class="tail">{{ h.freshest === null ? 'контакты не размечены' : 'все молчат ' + h.freshest + '+ дн' }}</span>
+          </div>
+        </div>
+        <p class="hint">Один контакт с мостом из такого кластера оживляет весь кластер.</p>
+      </template>
+
+      <label>Коллективные события</label>
+      <div style="margin-top:6px" v-if="cevents && cevents.length">
+        <div v-for="ce in cevents" :key="ce.id" class="drow2">
+          <div class="cal"><b>{{ calDay(ce.next) }}</b><span>{{ calMon(ce.next) }}</span></div>
+          <div class="what">
+            <b>{{ ce.title }}</b>
+            <span>{{ ce.tag ? '#' + ce.tag : 'вся сеть' }} · {{ ce.audience }} чел{{ ce.recurring ? ' · ежегодно' : '' }}{{ ce.closed ? ' · закрыто' : '' }}</span>
+          </div>
+          <div class="in" :class="{ soon: ce.days <= 14 }">{{ humanDays(ce.days) }}</div>
+          <button class="zap" v-if="!ce.closed && ce.days <= 30" @click="closeCe(ce)" title="Закрыть для всех">✓</button>
+          <button class="zap" @click="delCe(ce.id)" title="Удалить">✕</button>
+        </div>
+      </div>
+      <p class="hint" v-else>Одно событие — повод написать всему кластеру: забег для #бег, Новый год для всех.</p>
+
+      <div class="row" style="margin-top:10px">
+        <input type="text" v-model="newCe.date" placeholder="15.08" inputmode="numeric" style="flex:0 0 84px">
+        <input type="text" v-model="newCe.title" placeholder="Полумарафон">
+      </div>
+      <div class="row" style="margin-top:8px">
+        <input type="text" v-model="newCe.tag" placeholder="#тег (пусто — вся сеть)" autocapitalize="none">
+        <button type="button" class="btn ghost" style="flex:0 0 100px" @click="addCe"
+                :disabled="!newCe.date.trim() || !newCe.title.trim()">Добавить</button>
+      </div>
+      <p class="hint">Без года — ежегодное. Повод получит каждый человек кластера, закрытие одно на всех.</p>
+    </div>
+    <div class="panel" v-else><p class="hint">Загружаю…</p></div>
   </template>
 
   <!-- ================= КАРТОЧКА: ВКЛАДКИ ================= -->
@@ -1274,6 +1422,24 @@ const App = {
           </div>
           <textarea v-model="editing.context" rows="2" placeholder="как познакомились" style="margin-top:8px"></textarea>
 
+          <div class="meta" style="margin:14px 0 6px">кто познакомил</div>
+          <template v-if="editing.metVia">
+            <div class="chips">
+              <button type="button" class="chip on" @click="editing.metVia = null; editing.metViaName = ''">
+                🔗 {{ editing.metViaName }} · убрать
+              </button>
+            </div>
+          </template>
+          <template v-else>
+            <input type="text" v-model="editing.viaQuery" placeholder="имя из базы" autocapitalize="words">
+            <div class="chips" style="margin-top:8px" v-if="viaMatches(editing.viaQuery, editing.id).length">
+              <button type="button" class="chip" v-for="m in viaMatches(editing.viaQuery, editing.id)" :key="m.id"
+                      @click="editing.metVia = m.id; editing.metViaName = m.name; editing.viaQuery = ''">
+                {{ m.name }}
+              </button>
+            </div>
+          </template>
+
           <div class="meta" style="margin:16px 0 8px">даты</div>
           <div class="list" v-if="opened && opened.events.length">
             <button v-for="e in opened.events" :key="e.id" @click="delEvent(e.id)">
@@ -1318,6 +1484,7 @@ const App = {
     <button :class="{ on: tab === 'map' }" @click="tab = 'map'"><span class="dotmark"></span>Круг</button>
     <button :class="{ on: tab === 'add' }" @click="tab = 'add'"><span class="dotmark"></span>Добавить</button>
     <button :class="{ on: tab === 'roster' }" @click="tab = 'roster'"><span class="dotmark"></span>Разметка</button>
+    <button :class="{ on: tab === 'net' }" @click="tab = 'net'"><span class="dotmark"></span>Сеть</button>
   </nav>
 </template>
 `,

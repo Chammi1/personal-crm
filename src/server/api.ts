@@ -11,6 +11,8 @@ import type { Channel } from '../db/types.js';
 import { clusters, place, RING_RADIUS } from './layout.js';
 import * as pets from '../db/repo/pets.js';
 import * as family from '../domain/family.js';
+import * as network from '../domain/network.js';
+import * as collective from '../db/repo/collective.js';
 import * as avatars from './avatars.js';
 
 export const api = new Hono();
@@ -157,7 +159,7 @@ api.post('/person', async (c) => {
     birthday?: string; lastContact?: string;
     // расширенная форма-визард: досье и оценка сразу при добавлении
     occupation?: string; hooks?: string; dreams?: string; familyNote?: string;
-    rapport?: number;
+    rapport?: number; metVia?: number | null;
   }>();
 
   const name = (b.name ?? '').trim();
@@ -171,6 +173,8 @@ api.post('/person', async (c) => {
     phone: b.phone?.trim() || null,
     met_on: today(),
     met_context: b.context?.trim() || null,
+    met_via: Number.isInteger(Number(b.metVia)) && Number(b.metVia) > 0 && people.byId(Number(b.metVia))
+      ? Number(b.metVia) : null,
     tags: (b.tags ?? []).map((t) => t.trim()).filter(Boolean),
   });
 
@@ -201,6 +205,7 @@ api.patch('/person/:id', async (c) => {
     name?: string; circle?: number; city?: string; telegram?: string; phone?: string;
     context?: string; interval?: number | null; tags?: string[];
     dossier?: Record<string, string>; lastContact?: string; rapport?: number | null;
+    metVia?: number | null;
   }>();
 
   if (b.name !== undefined && !b.name.trim()) return c.json({ error: 'имя не может быть пустым' }, 400);
@@ -216,6 +221,11 @@ api.patch('/person/:id', async (c) => {
   if (b.rapport === null || b.rapport === 0) patch['rapport'] = null;
   else if (b.rapport !== undefined && b.rapport >= 1 && b.rapport <= 5) patch['rapport'] = b.rapport;
   if (b.interval !== undefined) patch['target_interval'] = b.interval || null;
+  // кто познакомил: null снимает связь, самого себя привязать нельзя
+  if (b.metVia !== undefined) {
+    const via = Number(b.metVia);
+    patch['met_via'] = Number.isInteger(via) && via > 0 && via !== id && people.byId(via) ? via : null;
+  }
   people.update(id, patch);
 
   if (b.circle !== undefined && isCircle(Number(b.circle))) people.setCircle(id, Number(b.circle) as 0);
@@ -446,6 +456,47 @@ api.post('/person/:id/activate', async (c) => {
 api.get('/tags', (c) => {
   const rows = people.allTags();
   return c.json(rows);
+});
+
+/* ---------- сеть и коллективные события ---------- */
+
+api.get('/network', (c) => c.json(network.analyze()));
+
+api.get('/cevents', (c) => {
+  const now = today();
+  return c.json(collective.all().map((ce) => {
+    const next = nextOccurrence(ce.event_date, ce.recurring === 1, now);
+    return {
+      id: ce.id, title: ce.title, tag: ce.tag, recurring: ce.recurring === 1,
+      next, days: daysBetween(now, next),
+      closed: ce.handled_for === next,
+      audience: ce.tag ? people.withTag(ce.tag).length : people.active().length,
+    };
+  }).sort((a, b) => a.days - b.days));
+});
+
+api.post('/cevents', async (c) => {
+  const b = await c.req.json<{ date?: string; title?: string; tag?: string; recurring?: boolean }>();
+  const date = b.date ? parseBirthday(b.date) : null;
+  if (!date) return c.json({ error: 'дата в формате 15.08 или 15.08.2026' }, 400);
+  if (!b.title?.trim()) return c.json({ error: 'нужно название' }, 400);
+  const id = collective.add(b.title.trim(), date, {
+    tag: b.tag?.trim().replace(/^#/, '').toLowerCase() || null,
+    recurring: b.recurring ?? date.startsWith('1900'),
+  });
+  return c.json({ id });
+});
+
+api.delete('/cevent/:id', (c) => {
+  collective.remove(Number(c.req.param('id')));
+  return c.json({ ok: true });
+});
+
+api.post('/cevent/:id/close', async (c) => {
+  const { occurrence } = await c.req.json<{ occurrence?: string }>().catch(() => ({} as { occurrence?: string }));
+  if (!occurrence) return c.json({ error: 'нужна дата наступления' }, 400);
+  collective.markHandled(Number(c.req.param('id')), occurrence);
+  return c.json({ ok: true });
 });
 
 api.get('/prompt', (c) => c.json({ prompt: intake.nextPrompt() }));

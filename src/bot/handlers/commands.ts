@@ -16,6 +16,7 @@ import * as people from '../../db/repo/people.js';
 import * as agenda from '../../db/repo/agenda.js';
 import * as collective from '../../db/repo/collective.js';
 import * as family from '../../domain/family.js';
+import * as network from '../../domain/network.js';
 import * as ui from '../ui.js';
 import { getCurrent, setCurrent, takePending } from '../state.js';
 
@@ -250,71 +251,36 @@ commands.command('stats', async (ctx) => {
  * Без теории графов — честные агрегаты, на которые можно опереться действием.
  */
 commands.command('network', async (ctx) => {
-  const now = today();
-  const active = people.active();
-  if (!active.length) { await ctx.reply('Сеть пуста — начни с /add.'); return; }
-
-  const tagsMap = people.tagsOfAll();
-  const lastMap = timeline.lastContactMap();
+  if (!people.active().length) { await ctx.reply('Сеть пуста — начни с /add.'); return; }
+  const view = network.analyze();
   const esc = (s: string): string => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-  // --- кластеры: размер, средняя тишина, свежесть последнего касания
-  const clusters = new Map<string, { n: number; silences: number[]; freshest: number | null }>();
-  for (const p of active) {
-    for (const t of tagsMap.get(p.id) ?? []) {
-      const c = clusters.get(t) ?? { n: 0, silences: [], freshest: null };
-      c.n++;
-      const last = lastMap.get(p.id);
-      if (last) {
-        const silent = daysBetween(last, now);
-        c.silences.push(silent);
-        c.freshest = c.freshest === null ? silent : Math.min(c.freshest, silent);
-      }
-      clusters.set(t, c);
-    }
-  }
-  const top = [...clusters.entries()].sort((a, b) => b[1].n - a[1].n).slice(0, 8);
-
   const lines = ['<b>Сеть изнутри</b>', '', '<b>Кластеры</b>'];
-  for (const [tag, c] of top) {
-    const avg = c.silences.length ? Math.round(c.silences.reduce((s, x) => s + x, 0) / c.silences.length) : null;
-    lines.push(`#${esc(tag)} — ${c.n} чел${avg !== null ? `, тишина в среднем ${avg} дн` : ', контакты не размечены'}`);
+  for (const c of view.clusters.slice(0, 8)) {
+    lines.push(`#${esc(c.tag)} — ${c.n} чел${c.avgSilence !== null ? `, тишина в среднем ${c.avgSilence} дн` : ', контакты не размечены'}`);
   }
 
-  // --- мосты: люди, состоящие в двух и более кластерах
-  const bridges = active
-    .map((p) => ({ p, tags: (tagsMap.get(p.id) ?? []) }))
-    .filter((x) => x.tags.length >= 2)
-    .sort((a, b) => b.tags.length - a.tags.length)
-    .slice(0, 5);
-  if (bridges.length) {
+  if (view.bridges.length) {
     lines.push('', '<b>Мосты между кластерами</b>');
-    for (const b of bridges) {
-      lines.push(`${esc(b.p.name)} — ${b.tags.map((t) => '#' + esc(t)).join(' ')}`);
+    for (const b of view.bridges.slice(0, 5)) {
+      lines.push(`${esc(b.name)} — ${b.tags.map((t) => '#' + esc(t)).join(' ')}`);
     }
     lines.push('<i>Потеряешь моста — потеряешь связь с целым куском сети.</i>');
   }
 
-  // --- коннекторы: кто привёл больше всех людей
-  const connectors = people.connectorTop(5);
-  if (connectors.length) {
+  if (view.connectors.length) {
     lines.push('', '<b>Коннекторы</b>');
-    for (const c of connectors) {
-      lines.push(`${esc(c.person.name)} — привёл ${c.n} ${plural(c.n, 'человека', 'человек', 'человек')}`);
+    for (const c of view.connectors.slice(0, 5)) {
+      lines.push(`${esc(c.name)} — привёл ${c.n} ${plural(c.n, 'человека', 'человек', 'человек')}`);
     }
   } else {
     lines.push('', '<i>Коннекторы не размечены: добавляй людей с ключом <code>через:Тимур</code> — узнаешь, кто расширяет твою сеть.</i>');
   }
 
-  // --- структурные дыры: кластеры, где давно никого не трогал
-  const holes = [...clusters.entries()]
-    .filter(([, c]) => c.n >= 2 && (c.freshest === null || c.freshest > 60))
-    .sort((a, b) => (b[1].freshest ?? 9999) - (a[1].freshest ?? 9999))
-    .slice(0, 4);
-  if (holes.length) {
+  if (view.holes.length) {
     lines.push('', '<b>Заброшенные кластеры</b>');
-    for (const [tag, c] of holes) {
-      lines.push(`#${esc(tag)} — ${c.freshest === null ? 'ни одного размеченного контакта' : `тишина минимум ${c.freshest} дн у всех ${c.n}`}`);
+    for (const h of view.holes.slice(0, 4)) {
+      lines.push(`#${esc(h.tag)} — ${h.freshest === null ? 'ни одного размеченного контакта' : `тишина минимум ${h.freshest} дн у всех ${h.n}`}`);
     }
     lines.push('<i>Один контакт с мостом из такого кластера оживляет весь кластер.</i>');
   }
