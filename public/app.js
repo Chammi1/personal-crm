@@ -257,9 +257,22 @@ const App = {
 
     // ---- карточка
     const cardTab = ref('dossier');   // dossier | history | dates
+    const pickCircle = ref(false);    // раскрыт ли быстрый выбор круга
     async function open(id) {
       opened.value = await call('/person/' + id);
       cardTab.value = 'dossier';
+      pickCircle.value = false;
+    }
+
+    /** Перенос в другой круг в один тап, без захода в правку. */
+    async function setCircleFromCard(circle) {
+      await call('/person/' + opened.value.id + '/circle', {
+        method: 'POST', body: JSON.stringify({ circle }),
+      });
+      pickCircle.value = false;
+      await open(opened.value.id);
+      await load();
+      flash('Перенесён: ' + (state.value.circleLoad.find((c) => c.circle === circle)?.label ?? 'круг ' + circle));
     }
 
     const MONTHS_SHORT = ['янв','фев','мар','апр','мая','июн','июл','авг','сен','окт','ноя','дек'];
@@ -612,7 +625,7 @@ const App = {
       WHEN, iso, humanDate, humanDays, plural, KIND, HEALTH,
       STEP_TITLES, wNext, wBack,
       cardTab, focusText, dossierRows, historyRows, touchesHalfYear, dateRows,
-      calDay, calMon, activateFromCard,
+      calDay, calMon, activateFromCard, pickCircle, setCircleFromCard,
       sectorLabel, sectorEdge, lit, ghosts, nodeRadius, nodeColor, showLabel, labelPos, shortWhy,
       headline, subline, circleLoad, open, act, toggleTag, addNewTag, save, anotherPrompt, load, flash,
       dir, dirQ, dirCity, dirTag, dirCircle, dirMore, dirCities, dirTags,
@@ -939,12 +952,19 @@ const App = {
         <div>
           <h2>{{ opened.name }}</h2>
           <div class="meta">
-            {{ opened.circleLabel }}<template v-if="opened.city"> · {{ opened.city }}</template><template v-if="opened.dossier && opened.dossier.occupation"> · {{ opened.dossier.occupation }}</template>
+            <button class="circle-btn" @click="pickCircle = !pickCircle">{{ opened.circleLabel }} ▾</button><template v-if="opened.city"> · {{ opened.city }}</template><template v-if="opened.dossier && opened.dossier.occupation"> · {{ opened.dossier.occupation }}</template>
           </div>
           <div class="rate" v-if="opened.rapport">
             <i v-for="n in 5" :key="n" :class="{ on: n <= opened.rapport }"></i>
           </div>
         </div>
+      </div>
+
+      <div class="chips" v-if="pickCircle" style="margin-top:12px">
+        <button type="button" class="chip" v-for="c in circleLoad" :key="c.circle"
+                :class="{ on: opened.circle === c.circle }" @click="setCircleFromCard(c.circle)">
+          {{ c.label }}<small>{{ c.n }} / {{ c.cap }}</small>
+        </button>
       </div>
 
       <div class="focus" v-if="focusText">

@@ -50,6 +50,16 @@ app.get('/avatars/:file', (c) => {
   });
 });
 
+// Telegram цепко кэширует файлы мини-аппов: после деплоя пользователь неделями
+// видел бы старый интерфейс. no-cache заставляет WebView проверять свежесть при
+// каждом открытии — файлы маленькие, цена копеечная, зато обновления мгновенные.
+app.use('/*', async (c, next) => {
+  await next();
+  const path = new URL(c.req.url).pathname;
+  if (path === '/' || /\.(js|css|html)$/.test(path)) {
+    c.header('Cache-Control', 'no-cache, must-revalidate');
+  }
+});
 app.use('/*', serveStatic({ root: './public' }));
 
 export function startServer(): void {

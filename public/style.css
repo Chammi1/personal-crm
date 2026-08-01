@@ -156,6 +156,10 @@ input::placeholder,textarea::placeholder{color:var(--ink-faint);}
   font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:.1em;
   text-transform:uppercase;color:var(--ink-faint);margin-top:6px;
 }
+.circle-btn{
+  background:transparent;border:0;padding:0;cursor:pointer;font:inherit;
+  color:var(--acc-soft);letter-spacing:inherit;text-transform:inherit;
+}
 .why-row{
   display:flex;gap:9px;align-items:flex-start;margin-top:14px;padding:12px 14px;
   background:rgba(255,255,255,.035);border-radius:12px;font-size:14px;line-height:1.4;
