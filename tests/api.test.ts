@@ -110,3 +110,60 @@ test('битая дата в /person/:id/event отклоняется', async ()
   const res = await api.request(`/person/${list[0]!.id}/event`, json({ date: '31.11', title: 'Ошибка' }));
   assert.equal(res.status, 400);
 });
+
+test('быстрый лог: контакт возвращает interactionId, summary дописывается вторым запросом', async () => {
+  const id = people.create({ name: 'Собеседник Быстрый', circle: 2 });
+
+  const res = await api.request(`/person/${id}/contact`, json({ channel: 'message' }));
+  assert.equal(res.status, 200);
+  const { interactionId } = await res.json() as { interactionId: number };
+  assert.ok(interactionId > 0, 'id касания вернулся клиенту');
+
+  const sum = await api.request(`/interaction/${interactionId}/summary`, json({ body: 'обсудили запуск' }));
+  assert.equal(sum.status, 200);
+
+  const card = await (await api.request('/person/' + id)).json() as {
+    interactions: { id: number; summary: string | null }[];
+    notes: { body: string }[];
+  };
+  assert.equal(card.interactions.find((i) => i.id === interactionId)?.summary, 'обсудили запуск');
+  assert.ok(card.notes.some((n) => n.body === 'обсудили запуск'), 'копия ушла в заметки');
+
+  const missing = await api.request('/interaction/999999/summary', json({ body: 'мимо' }));
+  assert.equal(missing.status, 404);
+});
+
+test('обещание без даты получает автосрок +14 дней и помечено «авто»', async () => {
+  const id = people.create({ name: 'Обещанник Автоматов', circle: 2 });
+
+  const res = await api.request(`/person/${id}/task`, json({ body: 'скинуть книгу' }));
+  assert.equal(res.status, 200);
+
+  const task = agenda.tasksOf(id)[0]!;
+  assert.equal(task.due_on, addDays(today(), 14));
+  assert.equal(task.due_auto, 1);
+});
+
+test('обещание с датой: своя дата сохраняется, «19.08» без года не падает, прошлое отклоняется', async () => {
+  const id = people.create({ name: 'Обещанник Ручной', circle: 2 });
+
+  const manual = addDays(today(), 5);
+  const ok = await api.request(`/person/${id}/task`, json({ body: 'позвать на обед', due: manual }));
+  assert.equal(ok.status, 200);
+  const t = agenda.tasksOf(id).find((x) => x.body === 'позвать на обед')!;
+  assert.equal(t.due_on, manual);
+  assert.equal(t.due_auto, 0);
+
+  // dd.mm без года: подставляется текущий/следующий год, а не 1900
+  const dm = await api.request(`/person/${id}/task`, json({ body: 'с годом разберись', due: '19.08' }));
+  assert.equal(dm.status, 200);
+  const t2 = agenda.tasksOf(id).find((x) => x.body === 'с годом разберись')!;
+  assert.ok(t2.due_on! >= today(), 'срок не в прошлом');
+  assert.ok(!t2.due_on!.startsWith('1900'));
+
+  const past = await api.request(`/person/${id}/task`, json({ body: 'в прошлое', due: addDays(today(), -3) }));
+  assert.equal(past.status, 400);
+
+  const trash = await api.request(`/person/${id}/task`, json({ body: 'кривая дата', due: 'завтра' }));
+  assert.equal(trash.status, 400);
+});

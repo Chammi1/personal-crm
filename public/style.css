@@ -84,10 +84,11 @@ label{
   display:block;font-family:'JetBrains Mono',monospace;font-size:9.5px;
   letter-spacing:.14em;text-transform:uppercase;color:var(--ink-faint);margin:18px 0 8px;
 }
-input[type=text],textarea{
+input[type=text],input[type=date],textarea{
   width:100%;background:var(--field);border:1px solid var(--line);border-radius:12px;
   color:var(--ink);font-family:inherit;font-size:16px;padding:13px 14px;outline:none;
 }
+input[type=date]{color-scheme:dark;}
 input:focus,textarea:focus{border-color:var(--acc);box-shadow:0 0 0 3px rgba(255,138,61,.12);}
 input::placeholder,textarea::placeholder{color:var(--ink-faint);}
 .row{display:flex;gap:8px;}

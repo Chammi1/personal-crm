@@ -182,11 +182,52 @@ const App = {
 
     /** Быстрый лог «написал» прямо со строки списка, без открытия карточки. */
     async function quickLog(p) {
-      await call('/person/' + p.id + '/contact', {
+      const { interactionId } = await call('/person/' + p.id + '/contact', {
         method: 'POST', body: JSON.stringify({ channel: 'message' }),
       });
-      flash('Записал: переписка с ' + p.name.split(' ')[0]);
       await load();
+      openFollowup(p.id, p.name, interactionId);
+    }
+
+    // ---- форма после лога: «о чём говорили» + «что-то обещал»
+    //
+    // Касание уже записано — форма только дополняет его содержанием.
+    // Пропуск ничего не ломает: голая дата контакта остаётся, как раньше.
+    const followup = ref(null);
+    function openFollowup(personId, name, interactionId) {
+      followup.value = {
+        personId, name: name.split(' ')[0], interactionId,
+        summary: '', promise: '', due: '', saving: false,
+      };
+    }
+    async function saveFollowup() {
+      const f = followup.value;
+      if (f.saving) return;
+      f.saving = true;
+      try {
+        if (f.summary.trim()) {
+          await call('/interaction/' + f.interactionId + '/summary', {
+            method: 'POST', body: JSON.stringify({ body: f.summary.trim() }),
+          });
+        }
+        if (f.promise.trim()) {
+          await call('/person/' + f.personId + '/task', {
+            method: 'POST', body: JSON.stringify({ body: f.promise.trim(), due: f.due || undefined }),
+          });
+        }
+        const got = [f.summary.trim() && 'заметка', f.promise.trim() && 'обещание'].filter(Boolean);
+        flash(got.length ? 'Записал: ' + got.join(' + ') : 'Записал контакт');
+        followup.value = null;
+        await load();
+        if (dir.value) await loadDir();
+      } catch (e) {
+        flash(e.message);
+        f.saving = false;
+      }
+    }
+    function skipFollowup() {
+      flash('Записал контакт');
+      followup.value = null;
     }
 
     // ---- вкладка «Сеть»: аналитика + коллективные события
@@ -314,6 +355,7 @@ const App = {
       opened.value = await call('/person/' + id);
       cardTab.value = 'dossier';
       pickCircle.value = false;
+      newPromise.value = { body: '', due: '' };
     }
 
     /** Перенос в другой круг в один тап, без захода в правку. */
@@ -351,7 +393,8 @@ const App = {
         bits.push(`Из заметок: «${txt}»`);
       }
       for (const t of (p.tasks ?? []).slice(0, 2)) {
-        bits.push(t.direction === 'i_owe' ? `Ты обещал: ${t.body}.` : `Тебе обещали: ${t.body}.`);
+        const due = t.due_on ? ` — до ${humanDate(t.due_on)}` : '';
+        bits.push(t.direction === 'i_owe' ? `Ты обещал: ${t.body}${due}.` : `Тебе обещали: ${t.body}${due}.`);
       }
       return bits.join(' ');
     });
@@ -427,6 +470,33 @@ const App = {
       await load();
       flash('Записал');
       if (body?.keepOpen) await open(id);
+    }
+
+    /** Контакт из карточки: логируем касание и сразу спрашиваем, о чём говорили. */
+    async function logContact(channel) {
+      const p = opened.value;
+      const { interactionId } = await call('/person/' + p.id + '/contact', {
+        method: 'POST', body: JSON.stringify({ channel }),
+      });
+      opened.value = null;
+      await load();
+      openFollowup(p.id, p.name, interactionId);
+    }
+
+    // ---- обещания из карточки
+    const newPromise = ref({ body: '', due: '' });
+    async function addPromise() {
+      const np = { ...newPromise.value };
+      if (!np.body.trim()) return;
+      try {
+        await call('/person/' + opened.value.id + '/task', {
+          method: 'POST', body: JSON.stringify({ body: np.body.trim(), due: np.due || undefined }),
+        });
+        newPromise.value = { body: '', due: '' };
+        await open(opened.value.id);
+        await load();
+        flash(np.due ? 'Обещание записано' : 'Обещание записано, срок авто — +14 дней');
+      } catch (e) { flash(e.message); }
     }
 
     // ---- редактирование
@@ -702,6 +772,7 @@ const App = {
       headline, subline, circleLoad, open, act, toggleTag, addNewTag, save, anotherPrompt, load, flash,
       dir, dirQ, dirCity, dirTag, dirCircle, dirMore, dirCities, dirTags,
       dirFiltered, dirSub, dirReset, dirHasFilter, loadDir, quickLog,
+      followup, saveFollowup, skipFollowup, logContact, newPromise, addPromise,
       net, cevents, newCe, loadNet, addCe, delCe, closeCe, viaMatches,
       editing, confirmStep, newEvent, archivedList, DOSSIER_BLOCKS, ROLES,
       block, toggleBlock, newMember, newPet,
@@ -1201,16 +1272,22 @@ const App = {
           </div>
         </template>
 
-        <template v-if="opened.tasks.length">
-          <div class="meta" style="margin-top:16px">обязательства</div>
-          <div class="list">
-            <button v-for="t in opened.tasks" :key="t.id" @click="act('/task/' + t.id + '/close', { keepOpen: true })">
-              <span class="bead" style="background:var(--owed)"></span>
-              <span>{{ t.direction === 'i_owe' ? 'Ты: ' : 'Он: ' }}{{ t.body }}</span>
-              <span class="tail">закрыть</span>
-            </button>
-          </div>
-        </template>
+        <div class="meta" style="margin-top:16px">обещания</div>
+        <div class="list" v-if="opened.tasks.length">
+          <button v-for="t in opened.tasks" :key="t.id" @click="act('/task/' + t.id + '/close', { keepOpen: true })">
+            <span class="bead" style="background:var(--owed)"></span>
+            <span class="kin-name">{{ t.direction === 'i_owe' ? 'Ты: ' : 'Он: ' }}{{ t.body }}
+              <em v-if="t.due_on">до {{ humanDate(t.due_on) }}{{ t.due_auto ? ' · срок авто' : '' }}</em>
+            </span>
+            <span class="tail">✓ сделано</span>
+          </button>
+        </div>
+        <div class="row" style="margin-top:10px">
+          <input type="text" v-model="newPromise.body" placeholder="+ обещал…" @keyup.enter="addPromise">
+          <input type="date" v-model="newPromise.due" style="flex:0 0 128px">
+        </div>
+        <button class="btn ghost" style="margin-top:8px" v-if="newPromise.body.trim()" @click="addPromise">Записать обещание</button>
+        <p class="hint" v-if="newPromise.body.trim() && !newPromise.due">Дата пустая — поставлю срок +14 дней и напомню.</p>
       </template>
 
       <!-- ===== вкладка ИСТОРИЯ ===== -->
@@ -1258,13 +1335,41 @@ const App = {
       </template>
 
       <div class="acts">
-        <button class="primary" @click="act('/person/' + opened.id + '/contact', { channel: 'message' })">Написал</button>
-        <button @click="act('/person/' + opened.id + '/contact', { channel: 'call' })">Звонок</button>
-        <button @click="act('/person/' + opened.id + '/contact', { channel: 'meeting' })">Встреча</button>
+        <button class="primary" @click="logContact('message')">Написал</button>
+        <button @click="logContact('call')">Звонок</button>
+        <button @click="logContact('meeting')">Встреча</button>
       </div>
       <div class="acts">
         <button @click="act('/person/' + opened.id + '/snooze', { days: 7 })">Отложить неделю</button>
         <button @click="openEdit">Редактировать</button>
+      </div>
+    </section>
+  </Transition>
+
+  <!-- ================= ПОСЛЕ ЛОГА: О ЧЁМ ГОВОРИЛИ + ОБЕЩАНИЕ ================= -->
+  <Transition name="fade">
+    <div v-if="followup" class="scrim" @click="skipFollowup"></div>
+  </Transition>
+  <Transition name="slide">
+    <section v-if="followup" class="sheet">
+      <div class="grab"></div>
+      <h2>{{ followup.name }} — записал</h2>
+      <p class="hint" style="margin-top:4px">Пара слов сейчас — и перед следующим разговором будет что вспомнить.</p>
+
+      <label>О чём говорили?</label>
+      <textarea v-model="followup.summary" rows="2" placeholder="одной строкой — уйдёт в досье и историю"></textarea>
+
+      <label>Что-то обещал?</label>
+      <input type="text" v-model="followup.promise" placeholder="скинуть контакт врача">
+      <template v-if="followup.promise.trim()">
+        <label>Срок</label>
+        <input type="date" v-model="followup.due">
+        <p class="hint" v-if="!followup.due">Дата пустая — поставлю срок +14 дней и напомню.</p>
+      </template>
+
+      <div class="acts">
+        <button class="primary" @click="saveFollowup" :disabled="followup.saving">Сохранить</button>
+        <button @click="skipFollowup">Пропустить</button>
       </div>
     </section>
   </Transition>

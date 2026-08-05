@@ -9,7 +9,9 @@ export type Pending =
   | { type: 'note'; personId: number }
   | { type: 'task'; personId: number }
   | { type: 'event'; personId: number }
-  | { type: 'contact_note'; personId: number };
+  | { type: 'contact_note'; personId: number; interactionId?: number }
+  /** второй шаг после записи контакта: «что-то обещал?» */
+  | { type: 'contact_promise'; personId: number };
 
 const PENDING_KEY = 'bot_pending';
 const CURRENT_KEY = 'bot_current';

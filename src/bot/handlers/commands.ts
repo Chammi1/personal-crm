@@ -410,7 +410,7 @@ commands.command('brief', async (ctx) => {
 
   const tasks = agenda.tasksOf(id);
   for (const t of tasks) {
-    lines.push(`${t.direction === 'i_owe' ? '❗ Ты обещал' : 'Тебе обещали'}: ${esc(t.body)}${t.due_on ? ' — до ' + humanDate(t.due_on) : ''}`);
+    lines.push(`${t.direction === 'i_owe' ? '❗ Ты обещал' : 'Тебе обещали'}: ${esc(t.body)}${t.due_on ? ' — до ' + humanDate(t.due_on) + (t.due_auto ? ' (авто)' : '') : ''}`);
   }
 
   const upcoming = agenda.eventsOf(id)

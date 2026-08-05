@@ -79,7 +79,7 @@ export function personCard(id: number): { text: string; keyboard: InlineKeyboard
   if (tasks.length) {
     lines.push('', '<b>Обязательства</b>');
     for (const t of tasks) {
-      lines.push(`${t.direction === 'i_owe' ? 'Ты:' : 'Он:'} ${esc(t.body)}${t.due_on ? ' — до ' + humanDate(t.due_on) : ''}`);
+      lines.push(`${t.direction === 'i_owe' ? 'Ты:' : 'Он:'} ${esc(t.body)}${t.due_on ? ' — до ' + humanDate(t.due_on) + (t.due_auto ? ' (авто)' : '') : ''}`);
     }
   }
 

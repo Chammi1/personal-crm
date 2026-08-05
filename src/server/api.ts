@@ -304,9 +304,24 @@ api.delete('/task/:id', (c) => {
 
 api.post('/person/:id/contact', async (c) => {
   const id = Number(c.req.param('id'));
-  const b = await c.req.json<{ channel?: Channel; on?: string }>()
-    .catch((): { channel?: Channel; on?: string } => ({}));
-  timeline.logInteraction(id, b.channel ?? 'message', { on: b.on });
+  const b = await c.req.json<{ channel?: Channel; on?: string; summary?: string }>()
+    .catch((): { channel?: Channel; on?: string; summary?: string } => ({}));
+  // interactionId возвращается клиенту: форма «о чём говорили» после быстрого
+  // лога дописывает суть в это же касание вторым запросом.
+  const interactionId = timeline.logInteraction(id, b.channel ?? 'message', {
+    on: b.on, summary: b.summary?.trim() || undefined,
+  });
+  return c.json({ ok: true, interactionId });
+});
+
+/** Дозапись «о чём говорили» к уже созданному касанию + копия в заметки (FTS). */
+api.post('/interaction/:id/summary', async (c) => {
+  const id = Number(c.req.param('id'));
+  const { body } = await c.req.json<{ body?: string }>().catch(() => ({} as { body?: string }));
+  if (!body?.trim()) return c.json({ error: 'пустой текст' }, 400);
+  const personId = timeline.setSummary(id, body.trim());
+  if (personId === null) return c.json({ error: 'not found' }, 404);
+  timeline.addNote(personId, body.trim());
   return c.json({ ok: true });
 });
 
@@ -336,10 +351,25 @@ api.post('/person/:id/snooze', async (c) => {
 
 api.post('/person/:id/task', async (c) => {
   const id = Number(c.req.param('id'));
+  if (!people.byId(id)) return c.json({ error: 'not found' }, 404);
   const b = await c.req.json<{ body?: string; direction?: 'i_owe' | 'they_owe'; due?: string }>();
   if (!b.body?.trim()) return c.json({ error: 'пустое обещание' }, 400);
-  agenda.addTask(id, b.direction ?? 'i_owe', b.body.trim(), b.due || null);
-  return c.json({ ok: true });
+  // Срок необязателен: без него addTask поставит автосрок +14 дней.
+  // Кривую дату честно отклоняем, а не превращаем молча в авто.
+  let due: string | null = null;
+  if (b.due?.trim()) {
+    const raw = b.due.trim();
+    due = /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw : parseBirthday(raw);
+    if (!due) return c.json({ error: 'срок в формате 2026-08-19 или 19.08' }, 400);
+    if (due.startsWith('1900')) {
+      // год не указан: текущий, а если дата уже прошла — следующий
+      due = today().slice(0, 4) + due.slice(4);
+      if (due < today()) due = String(Number(due.slice(0, 4)) + 1) + due.slice(4);
+    }
+    if (due < today()) return c.json({ error: 'срок уже в прошлом' }, 400);
+  }
+  const taskId = agenda.addTask(id, b.direction ?? 'i_owe', b.body.trim(), due);
+  return c.json({ ok: true, id: taskId });
 });
 
 api.post('/task/:id/close', (c) => {

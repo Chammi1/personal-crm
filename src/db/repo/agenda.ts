@@ -1,5 +1,5 @@
 import { db } from '../index.js';
-import { today } from '../../domain/dates.js';
+import { addDays, today } from '../../domain/dates.js';
 import type { EventKind, PersonEvent, Task, TaskDirection } from '../types.js';
 import * as settings from './settings.js';
 
@@ -66,15 +66,25 @@ export function removeTask(id: number): void {
   db.prepare('DELETE FROM task WHERE id = ?').run(id);
 }
 
+/** Мягкий срок по умолчанию: обещание без даты напомнит о себе через ~2 недели. */
+export const AUTO_DUE_DAYS = 14;
+
+/**
+ * Бессрочных обещаний не бывает: без явной даты ставится автосрок +14 дней
+ * (помечен due_auto), иначе обещание никогда не дозревало бы до owed-сигнала
+ * и молча тонуло. Правило общее для всех путей создания: бот, мини-апп, голос.
+ */
 export function addTask(
   personId: number,
   direction: TaskDirection,
   body: string,
   dueOn: string | null = null,
 ): number {
+  const auto = dueOn === null;
+  const due = dueOn ?? addDays(today(), AUTO_DUE_DAYS);
   const info = db.prepare(
-    'INSERT INTO task (person_id, direction, body, due_on) VALUES (?, ?, ?, ?)',
-  ).run(personId, direction, body, dueOn);
+    'INSERT INTO task (person_id, direction, body, due_on, due_auto) VALUES (?, ?, ?, ?, ?)',
+  ).run(personId, direction, body, due, auto ? 1 : 0);
   return Number(info.lastInsertRowid);
 }
 

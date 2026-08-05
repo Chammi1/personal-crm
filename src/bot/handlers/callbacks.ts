@@ -8,7 +8,7 @@ import * as timeline from '../../db/repo/timeline.js';
 import * as agenda from '../../db/repo/agenda.js';
 import * as collective from '../../db/repo/collective.js';
 import * as ui from '../ui.js';
-import { clearPending, setCurrent, setPending } from '../state.js';
+import { clearPending, getPending, setCurrent, setPending } from '../state.js';
 
 export const callbacks = new Composer();
 
@@ -35,23 +35,52 @@ const CHANNEL_WORD: Record<Channel, string> = {
 callbacks.callbackQuery(/^c:(\d+):(message|call|meeting|event)$/, async (ctx) => {
   const id = Number(ctx.match[1]);
   const channel = ctx.match[2] as Channel;
-  timeline.logInteraction(id, channel);
+  const interactionId = timeline.logInteraction(id, channel);
   await ctx.answerCallbackQuery(`${CHANNEL_WORD[channel]} записана`);
   await showCard(ctx, id, true);
 
   // Сразу спрашиваем содержание: без этого копится идеальная история дат
   // при пустой истории разговоров, а перед звонком нужна именно вторая.
-  setPending({ type: 'contact_note', personId: id });
+  setPending({ type: 'contact_note', personId: id, interactionId });
   await ctx.reply('О чём говорили? Одной строкой — уйдёт в заметки.', {
     reply_markup: new InlineKeyboard().text('Пропустить', 'skipnote'),
   });
 });
 
+/** Текст и клавиатура второго шага после контакта: «что-то обещал?» */
+function promiseQuestion(): { text: string; keyboard: InlineKeyboard } {
+  return {
+    text: 'Что-то обещал? Напиши: <code>скинуть контакт врача до 15.08</code>\n' +
+      'Без «до» поставлю срок +14 дней и напомню.',
+    keyboard: new InlineKeyboard().text('Ничего', 'skippromise'),
+  };
+}
+
 callbacks.callbackQuery('skipnote', async (ctx) => {
+  // Пропуск заметки не завершает сценарий: впереди ещё вопрос про обещание.
+  const pending = getPending();
+  await ctx.answerCallbackQuery('Ок');
+  if (pending?.type === 'contact_note') {
+    setPending({ type: 'contact_promise', personId: pending.personId });
+    const q = promiseQuestion();
+    if (ctx.callbackQuery.message) {
+      await ctx.editMessageText(q.text, { parse_mode: 'HTML', reply_markup: q.keyboard });
+    } else {
+      await ctx.reply(q.text, { parse_mode: 'HTML', reply_markup: q.keyboard });
+    }
+    return;
+  }
+  clearPending();
+  if (ctx.callbackQuery.message) {
+    await ctx.editMessageText('Ок, без заметки.');
+  }
+});
+
+callbacks.callbackQuery('skippromise', async (ctx) => {
   clearPending();
   await ctx.answerCallbackQuery('Ок');
   if (ctx.callbackQuery.message) {
-    await ctx.editMessageText('Ок, без заметки.');
+    await ctx.editMessageText('Ок, без обещаний.');
   }
 });
 
@@ -75,7 +104,7 @@ callbacks.callbackQuery(/^t:(\d+)$/, async (ctx) => {
   await ctx.answerCallbackQuery();
   await ctx.reply(
     'Обещание. Формат: <code>я скинуть контакт юриста до 30.07</code>\n' +
-    'Начни с «я» или «он», срок через «до» — необязательно.',
+    'Начни с «я» или «он». Без «до» поставлю срок +14 дней и напомню.',
     { parse_mode: 'HTML' },
   );
 });
@@ -133,36 +162,77 @@ callbacks.callbackQuery(/^cevdel:(\d+)$/, async (ctx) => {
   if (ctx.callbackQuery.message) await ctx.editMessageText('Коллективное событие удалено.');
 });
 
+/**
+ * Разбор обещания из свободного текста: «скинуть контакт до 15.08».
+ * Срок через «до» необязателен — без него addTask поставит автосрок +14 дней.
+ */
+export function parsePromise(text: string): {
+  direction: 'i_owe' | 'they_owe'; body: string; due: string | null;
+} {
+  const dueMatch = text.match(/\sдо\s+(\S+)$/i);
+  const dueRaw = dueMatch ? parseBirthday(dueMatch[1]!) : null;
+  // Бот сам предлагает формат «до 30.07» — без года. Парсер вернёт 1900,
+  // и без нормализации срок молча терялся, обещание висело бессрочным.
+  let due: string | null = null;
+  if (dueRaw) {
+    due = dueRaw.startsWith('1900') ? String(new Date().getFullYear()) + dueRaw.slice(4) : dueRaw;
+    if (due < today()) due = String(Number(due.slice(0, 4)) + 1) + due.slice(4);
+  }
+  const body = (dueMatch ? text.slice(0, dueMatch.index) : text)
+    .replace(/^(я|он|она|они)\s+/i, '').trim();
+  const direction = /^(я)\b/i.test(text) ? 'i_owe' : /^(он|она|они)\b/i.test(text) ? 'they_owe' : 'i_owe';
+  return { direction, body, due };
+}
+
+async function savePromise(ctx: Context, id: number, text: string): Promise<void> {
+  const { direction, body, due } = parsePromise(text);
+  const taskId = agenda.addTask(id, direction, body, due);
+  const saved = agenda.tasksOf(id).find((t) => t.id === taskId);
+  const dueHuman = saved?.due_on ? saved.due_on.split('-').reverse().join('.') : '';
+  await ctx.reply(
+    due
+      ? `Обещание записано, срок — ${dueHuman}.`
+      : `Обещание записано, напомню к ${dueHuman} (срок авто — можно было указать через «до»).`,
+  );
+}
+
 /** Обработка свободного ввода, которого ждала одна из кнопок. */
 export async function handlePendingInput(
   ctx: Context,
-  pending: { type: 'note' | 'task' | 'event' | 'contact_note'; personId: number },
+  pending: {
+    type: 'note' | 'task' | 'event' | 'contact_note' | 'contact_promise';
+    personId: number;
+    interactionId?: number;
+  },
   text: string,
 ): Promise<void> {
   const id = pending.personId;
 
   if (pending.type === 'note' || pending.type === 'contact_note') {
     timeline.addNote(id, text);
+    // Суть разговора дублируется в само касание: так «История» показывает
+    // не голое «переписка», а о чём она была.
+    if (pending.type === 'contact_note' && pending.interactionId) {
+      timeline.setSummary(pending.interactionId, text);
+    }
     await ctx.reply('Записал.');
-    // после записи контакта карточка уже на экране — не дублируем её
-    if (pending.type === 'contact_note') return;
+    // после записи контакта карточка уже на экране — не дублируем её,
+    // а сразу спрашиваем про обещание: это второй шаг того же сценария
+    if (pending.type === 'contact_note') {
+      setPending({ type: 'contact_promise', personId: id });
+      const q = promiseQuestion();
+      await ctx.reply(q.text, { parse_mode: 'HTML', reply_markup: q.keyboard });
+      return;
+    }
+  }
+
+  if (pending.type === 'contact_promise') {
+    await savePromise(ctx, id, text);
+    return; // карточка уже на экране
   }
 
   if (pending.type === 'task') {
-    const dueMatch = text.match(/\sдо\s+(\S+)$/i);
-    const dueRaw = dueMatch ? parseBirthday(dueMatch[1]!) : null;
-    // Бот сам предлагает формат «до 30.07» — без года. Парсер вернёт 1900,
-    // и без нормализации срок молча терялся, обещание висело бессрочным.
-    let due: string | null = null;
-    if (dueRaw) {
-      due = dueRaw.startsWith('1900') ? String(new Date().getFullYear()) + dueRaw.slice(4) : dueRaw;
-      if (due < today()) due = String(Number(due.slice(0, 4)) + 1) + due.slice(4);
-    }
-    const body = (dueMatch ? text.slice(0, dueMatch.index) : text)
-      .replace(/^(я|он|она|они)\s+/i, '').trim();
-    const direction = /^(я)\b/i.test(text) ? 'i_owe' : /^(он|она|они)\b/i.test(text) ? 'they_owe' : 'i_owe';
-    agenda.addTask(id, direction, body, due);
-    await ctx.reply(due ? `Обещание записано, срок — ${due.split('-').reverse().join('.')}.` : 'Обещание записано.');
+    await savePromise(ctx, id, text);
   }
 
   if (pending.type === 'event') {

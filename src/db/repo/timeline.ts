@@ -16,6 +16,18 @@ export function logInteraction(
   return Number(info.lastInsertRowid);
 }
 
+/**
+ * Дописать «о чём говорили» к уже записанному касанию.
+ * Возвращает person_id касания или null, если касание не нашлось.
+ */
+export function setSummary(interactionId: number, summary: string): number | null {
+  const row = db.prepare('SELECT person_id FROM interaction WHERE id = ?')
+    .get(interactionId) as { person_id: number } | undefined;
+  if (!row) return null;
+  db.prepare('UPDATE interaction SET summary = ? WHERE id = ?').run(summary, interactionId);
+  return row.person_id;
+}
+
 /** Лента касаний для вкладки «История» в карточке. */
 export function interactionsOf(personId: number, limit = 40): Interaction[] {
   return db.prepare(

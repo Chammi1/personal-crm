@@ -81,6 +81,8 @@ export interface Task {
   direction: TaskDirection;
   body: string;
   due_on: string | null;
+  /** 1 — срок выставлен автоматически (+14 дней), а не владельцем */
+  due_auto: number;
   done_at: string | null;
   created_at: string;
 }

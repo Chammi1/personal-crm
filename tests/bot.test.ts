@@ -82,19 +82,41 @@ test('через:Имя связывает нового человека с ко
   assert.equal(people.introduced(kostya.id).length, 1);
 });
 
-test('колбэк c:id:message пишет контакт и ждёт «о чём говорили»', async () => {
+test('колбэк c:id:message пишет контакт, ждёт «о чём говорили», потом «что обещал»', async () => {
   const p = people.search('Аня Соколова')[0]!;
   const before = timeline.lastInteraction(p.id);
   await sendCallback(`c:${p.id}:message`);
 
   const after = timeline.lastInteraction(p.id);
   assert.ok(after && after.id !== before?.id, 'контакт записан');
-  assert.deepEqual(getPending(), { type: 'contact_note', personId: p.id });
+  const pending = getPending();
+  assert.equal(pending?.type, 'contact_note');
+  assert.equal(pending?.personId, p.id);
 
-  // следующий свободный текст уходит заметкой
+  // следующий свободный текст уходит заметкой и дублируется в само касание
   await sendText('говорили про марафон');
-  assert.equal(getPending(), null);
   assert.match(timeline.notesOf(p.id, 1)[0]!.body, /марафон/);
+  assert.match(timeline.lastInteraction(p.id)!.summary ?? '', /марафон/);
+
+  // сценарий не закончен: второй шаг — вопрос про обещание
+  assert.equal(getPending()?.type, 'contact_promise');
+  await sendText('скинуть план тренировок');
+
+  assert.equal(getPending(), null);
+  const task = agenda.tasksOf(p.id).at(-1)!;
+  assert.equal(task.body, 'скинуть план тренировок');
+  assert.equal(task.due_auto, 1, 'без даты — срок авто');
+  assert.equal(task.due_on, addDays(today(), 14), 'автосрок +14 дней');
+  agenda.closeTask(task.id);
+});
+
+test('кнопка «Пропустить» после контакта ведёт к вопросу про обещание, «Ничего» завершает', async () => {
+  const p = people.search('Аня Соколова')[0]!;
+  await sendCallback(`c:${p.id}:message`);
+  await sendCallback('skipnote');
+  assert.equal(getPending()?.type, 'contact_promise', 'пропуск заметки не съедает шаг обещания');
+  await sendCallback('skippromise');
+  assert.equal(getPending(), null);
 });
 
 test('обещание «до 30.07» получает год, а не теряет срок', async () => {
